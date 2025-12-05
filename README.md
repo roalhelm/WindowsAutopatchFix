@@ -13,6 +13,8 @@ This Intune Proactive Remediation package automatically detects and resolves Win
 - Service failures (Windows Update, BITS, Cryptographic Services)
 - Corrupted Windows Update components (SoftwareDistribution, catroot2)
 - Registry blocks and policy conflicts
+- WSUS configuration conflicts (WUServer, UseWUServer)
+- Legacy ConfigMgr/WSUS artifacts blocking Autopatch
 - Intune Management Extension sync issues
 - Windows Autopatch configuration problems
 - Low disk space and pending reboots
@@ -76,6 +78,8 @@ Comprehensive health check that detects:
 - Service status (Windows Update, BITS, Cryptographic Services, Intune Management Extension)
 - Windows Update component integrity
 - Registry blocks and policy conflicts
+- WSUS Server configuration (WUServer, UseWUServer)
+- Legacy ConfigMgr/WSUS remnants
 - Intune enrollment and policy sync status
 - Windows Autopatch configuration
 - Pending reboots and system file corruption
@@ -89,7 +93,8 @@ Comprehensive health check that detects:
 Automated repair actions including:
 - Service restart and startup type configuration
 - Windows Update component reset (SoftwareDistribution, catroot2)
-- Registry cleanup (policy blocks, setup blocks)
+- Registry cleanup (policy blocks, setup blocks, WSUS configuration)
+- WSUS artifact removal (WUServer, UseWUServer)
 - DLL re-registration (Windows Update components)
 - Intune Management Extension service restart and sync trigger
 - Windows Autopatch configuration refresh
@@ -187,6 +192,28 @@ The remediation script **cannot** automatically fix:
 
 These issues require manual intervention or different remediation approaches.
 
+## 🔄 ConfigMgr/WSUS Migration Support
+
+This solution specifically addresses common issues when migrating from Configuration Manager or WSUS to Intune and Windows Autopatch:
+
+### Detected WSUS Artifacts
+- **WUServer** - WSUS server URL that redirects updates away from cloud services
+- **UseWUServer** - Registry value that forces use of WSUS instead of Windows Update
+
+### Common Migration Scenarios
+1. **Co-Management enabled** but Software Update client settings still active in ConfigMgr
+2. **Control slider moved to Intune** but registry artifacts remain
+3. **GPO remnants** from previous WSUS deployments
+4. **Hybrid environments** with mixed update sources
+
+### Best Practices
+- Ensure ConfigMgr Software Update client settings are disabled for Autopatch devices
+- Target Autopatch devices with client settings that disable Windows and Office updates
+- Run this remediation regularly to catch configuration drift
+- Monitor log files for recurring WSUS configuration detections
+
+For more information, see [Microsoft's Conflicting Configurations Documentation](https://learn.microsoft.com/en-us/windows/deployment/windows-autopatch/references/windows-autopatch-conflicting-configurations).
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please feel free to submit issues or pull requests.
@@ -206,6 +233,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Expanded detection to cover all common Windows Update errors
 - Added comprehensive remediation actions
 - Implemented Intune/Autopatch sync checks and fixes
+- Added WSUS configuration detection and removal (WUServer, UseWUServer)
+- Support for ConfigMgr/WSUS to Intune migration scenarios
 - Enhanced logging to IntuneManagementExtension directory
 - Added disk cleanup functionality
 - Registry policy block removal
@@ -223,6 +252,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Microsoft Intune documentation and community
 - Windows Update troubleshooting guides
 - PowerShell community contributions
+- [Ken Goossens](https://kengoossens.com/) for Windows Autopatch remediation insights
 
 ---
 

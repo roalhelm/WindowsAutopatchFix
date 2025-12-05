@@ -263,6 +263,21 @@ try {
             if ($doNotConnectToWindowsUpdateInternetLocations -eq 1) {
                 $issues += "Windows Update is blocked from connecting to Internet locations (policy conflict)"
             }
+            
+            # Check for WSUS Server configuration (blocks Autopatch)
+            $wuServer = (Get-ItemProperty -Path $wufbPath -Name WUServer -ErrorAction SilentlyContinue).WUServer
+            if ($wuServer) {
+                $issues += "WSUS Server configured: $wuServer (conflicts with Windows Autopatch/Cloud Updates)"
+            }
+        }
+        
+        # Check if UseWUServer is enabled (forces WSUS instead of Windows Update)
+        $wuAUPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU"
+        if (Test-Path $wuAUPath) {
+            $useWUServer = (Get-ItemProperty -Path $wuAUPath -Name UseWUServer -ErrorAction SilentlyContinue).UseWUServer
+            if ($useWUServer -eq 1) {
+                $issues += "UseWUServer is enabled (forces WSUS, blocks Windows Autopatch)"
+            }
         }
     }
     catch {
