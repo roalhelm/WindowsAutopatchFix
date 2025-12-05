@@ -33,11 +33,21 @@
 
 # PowerShell Detection Script for Windows Update Issues
 
+# Function to log output to file and console
+$global:LogPath = "C:\ProgramData\Microsoft\IntuneManagementExtension\Logs\WindowsUpdateFix_detection.log"
+function Write-Log {
+    param ([string]$message)
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $logLine = "$timestamp - $message"
+    Write-Output $logLine
+    Add-Content -Path $global:LogPath -Value $logLine -ErrorAction SilentlyContinue
+}
+
 try {
     $exitCode = 0
     $issues = @()
     
-    Write-Output "Starting Windows Update health detection for all common issues"
+    Write-Log "Starting Windows Update health detection for all common issues"
     
     # Check for TPM activation
     try {
@@ -217,7 +227,7 @@ try {
         }
         else {
             # Autopatch registry may not exist if not configured, this is informational
-            Write-Output "Windows Autopatch registry not found (may not be configured)"
+            Write-Log "Windows Autopatch registry not found (may not be configured)"
         }
     }
     catch {
@@ -415,18 +425,24 @@ try {
         
         # Output as single line with comma separation
         Write-Output $detectionOutput
+        Write-Log $detectionOutput
         
         $exitCode = 1
     }
     else {
-        Write-Output "STATUS: No issues detected, System appears healthy"
+        $statusMessage = "STATUS: No issues detected, System appears healthy"
+        Write-Output $statusMessage
+        Write-Log $statusMessage
         $exitCode = 0
     }
     
+    Write-Log "Detection completed with exit code: $exitCode"
     Exit $exitCode
 }
 catch {
-    Write-Error "Detection script encountered an unexpected error: $($_.Exception.Message)"
+    $errorMessage = "Detection script encountered an unexpected error: $($_.Exception.Message)"
+    Write-Error $errorMessage
+    Write-Log $errorMessage
     # Exit 1 to trigger remediation if detection script fails
     Exit 1
 }
