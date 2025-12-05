@@ -216,6 +216,46 @@ try {
     Write-Log "Error triggering Intune sync: $($_.Exception.Message)"
 }
 
+# Check and refresh Windows Autopatch configuration
+Write-Log "Checking Windows Autopatch configuration..."
+try {
+    $autopatchRegPath = "HKLM:\SOFTWARE\Microsoft\Windows\Autopatch"
+    
+    if (Test-Path $autopatchRegPath) {
+        $autopatchEnabled = (Get-ItemProperty -Path $autopatchRegPath -Name Enabled -ErrorAction SilentlyContinue).Enabled
+        
+        if ($autopatchEnabled -eq 1) {
+            Write-Log "Windows Autopatch is enabled - Refreshing configuration..."
+            
+            # Trigger Autopatch policy refresh by restarting related services
+            $autopatchServices = @('wuauserv', 'UsoSvc')
+            foreach ($svc in $autopatchServices) {
+                try {
+                    $service = Get-Service -Name $svc -ErrorAction SilentlyContinue
+                    if ($service -and $service.Status -eq "Running") {
+                        Restart-Service -Name $svc -Force -ErrorAction Stop
+                        Write-Log "Restarted $svc for Autopatch refresh"
+                    }
+                } catch {
+                    Write-Log "Could not restart $svc`: $($_.Exception.Message)"
+                }
+            }
+            
+            Write-Log "Autopatch configuration refresh completed"
+        } elseif ($autopatchEnabled -eq 0) {
+            Write-Log "Windows Autopatch is configured but disabled (Enabled = 0)"
+        } else {
+            Write-Log "Windows Autopatch Enabled value not set - Attempting to enable..."
+            Set-ItemProperty -Path $autopatchRegPath -Name Enabled -Value 1 -Type DWord -ErrorAction Stop
+            Write-Log "Set Autopatch Enabled registry value to 1"
+        }
+    } else {
+        Write-Log "Windows Autopatch registry not found (device may not be enrolled in Autopatch)"
+    }
+} catch {
+    Write-Log "Error checking/refreshing Autopatch configuration: $($_.Exception.Message)"
+}
+
 # Force Group Policy update to apply any Intune-delivered policies
 Write-Log "Forcing Group Policy update..."
 try {
