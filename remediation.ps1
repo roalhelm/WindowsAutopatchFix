@@ -366,8 +366,8 @@ try {
             }
         }
         
-        # Run cleanmgr with automated settings
-        Start-Process -FilePath "$env:SystemRoot\System32\cleanmgr.exe" -ArgumentList "/sagerun:100" -Wait -NoNewWindow -ErrorAction SilentlyContinue
+        # Run cleanmgr with automated settings in hidden mode
+        Start-Process -FilePath "$env:SystemRoot\System32\cleanmgr.exe" -ArgumentList "/sagerun:100" -Wait -NoNewWindow -WindowStyle Hidden -ErrorAction SilentlyContinue
         Write-Log "Disk Cleanup completed"
         
         # Check free space after cleanup
