@@ -225,9 +225,117 @@ try {
         $autopatchEnabled = (Get-ItemProperty -Path $autopatchRegPath -Name Enabled -ErrorAction SilentlyContinue).Enabled
         
         if ($autopatchEnabled -eq 1) {
-            Write-Log "Windows Autopatch is enabled - Refreshing configuration..."
+            Write-Log "Windows Autopatch is enabled - Checking Client Broker..."
+            
+            # Check if Windows Autopatch Client Broker is installed
+            $autopatchBrokerInstalled = $false
+            $autopatchBrokerPath = $null
+            $autopatchBrokerPaths = @(
+                "C:\Program Files\Microsoft Windows Autopatch\WindowsAutopatchClientBroker.exe",
+                "C:\Program Files (x86)\Microsoft Windows Autopatch\WindowsAutopatchClientBroker.exe"
+            )
+            
+            foreach ($path in $autopatchBrokerPaths) {
+                if (Test-Path $path) {
+                    $autopatchBrokerInstalled = $true
+                    $autopatchBrokerPath = $path
+                    Write-Log "Windows Autopatch Client Broker found at: $path"
+                    break
+                }
+            }
+            
+            # Check via registry if not found by path
+            if (-not $autopatchBrokerInstalled) {
+                $autopatchApp = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue | 
+                    Where-Object { $_.DisplayName -like "*Windows Autopatch*" -or $_.DisplayName -like "*Autopatch Client Broker*" }
+                
+                if (-not $autopatchApp) {
+                    $autopatchApp = Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue | 
+                        Where-Object { $_.DisplayName -like "*Windows Autopatch*" -or $_.DisplayName -like "*Autopatch Client Broker*" }
+                }
+                
+                if ($autopatchApp) {
+                    $autopatchBrokerInstalled = $true
+                    Write-Log "Windows Autopatch Client Broker is installed (Version: $($autopatchApp.DisplayVersion))"
+                }
+            }
+            
+            # If Client Broker is not installed, trigger installation via Intune sync
+            if (-not $autopatchBrokerInstalled) {
+                Write-Log "Windows Autopatch Client Broker NOT found - Triggering installation..."
+                
+                # The Client Broker is deployed via Intune when device is enrolled in Autopatch
+                # Trigger Intune sync to install it
+                try {
+                    # Restart Intune Management Extension to trigger app sync
+                    Write-Log "Restarting Intune Management Extension to trigger app deployment..."
+                    Restart-Service -Name IntuneManagementExtension -Force -ErrorAction Stop
+                    Start-Sleep -Seconds 3
+                    
+                    # Trigger device sync via deviceenroller
+                    if (Test-Path "$env:windir\System32\deviceenroller.exe") {
+                        Start-Process -FilePath "$env:windir\System32\deviceenroller.exe" -ArgumentList "/c /AutoEnrollMDM" -Wait -NoNewWindow -ErrorAction SilentlyContinue
+                        Write-Log "Device enrollment sync triggered for Autopatch Client Broker installation"
+                    }
+                    
+                    # Trigger Company Portal sync (alternative method)
+                    $IMEExe = "$env:ProgramFiles\Microsoft Intune Management Extension\Microsoft.Management.Services.IntuneWindowsAgent.exe"
+                    if (Test-Path $IMEExe) {
+                        Write-Log "Intune Management Extension will check for required apps on next sync cycle"
+                    }
+                    
+                    Write-Log "Installation trigger completed. Client Broker should install within 30-60 minutes"
+                    Write-Log "Manual verification recommended: Check Intune > Devices > Apps to confirm deployment"
+                } catch {
+                    Write-Log "Error triggering Client Broker installation: $($_.Exception.Message)"
+                }
+            } else {
+                # Client Broker is installed - verify it's functioning
+                Write-Log "Verifying Windows Autopatch Client Broker functionality..."
+                
+                try {
+                    # Check if broker process is running
+                    $brokerProcess = Get-Process -Name "WindowsAutopatchClientBroker" -ErrorAction SilentlyContinue
+                    if ($brokerProcess) {
+                        Write-Log "Windows Autopatch Client Broker process is running (PID: $($brokerProcess.Id))"
+                    } else {
+                        Write-Log "Windows Autopatch Client Broker process is not running - Attempting to start..."
+                        
+                        if ($autopatchBrokerPath) {
+                            Start-Process -FilePath $autopatchBrokerPath -ErrorAction Stop
+                            Start-Sleep -Seconds 2
+                            
+                            $brokerProcess = Get-Process -Name "WindowsAutopatchClientBroker" -ErrorAction SilentlyContinue
+                            if ($brokerProcess) {
+                                Write-Log "Windows Autopatch Client Broker started successfully"
+                            } else {
+                                Write-Log "Failed to start Windows Autopatch Client Broker - May require manual intervention"
+                            }
+                        }
+                    }
+                    
+                    # Check broker service (if it has one)
+                    $brokerService = Get-Service -Name "WindowsAutopatch*" -ErrorAction SilentlyContinue
+                    if ($brokerService) {
+                        foreach ($svc in $brokerService) {
+                            Write-Log "Autopatch Service: $($svc.Name) - Status: $($svc.Status)"
+                            if ($svc.Status -ne "Running" -and $svc.StartType -ne "Disabled") {
+                                try {
+                                    Start-Service -Name $svc.Name -ErrorAction Stop
+                                    Write-Log "Started Autopatch service: $($svc.Name)"
+                                } catch {
+                                    Write-Log "Could not start $($svc.Name): $($_.Exception.Message)"
+                                }
+                            }
+                        }
+                    }
+                } catch {
+                    Write-Log "Error verifying Client Broker functionality: $($_.Exception.Message)"
+                }
+            }
             
             # Trigger Autopatch policy refresh by restarting related services
+            Write-Log "Refreshing Autopatch update services..."
             $autopatchServices = @('wuauserv', 'UsoSvc')
             foreach ($svc in $autopatchServices) {
                 try {

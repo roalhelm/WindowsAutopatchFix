@@ -1,0 +1,68 @@
+Windows Autopatch
+
+￼
+
+Legend & References (what each component does)
+* Windows Autopatch Client Broker: on‑demand agent to perform device readiness checks and automated log collection for support; managed from Intune → Tenant administration → Windows Autopatch → Tenant management → Manage client broker. Since Sept 22, 2025, installation defaults to a Win32 app; PowerShell install remains available. [learn.microsoft.com], [learn.microsoft.com]
+* Windows Autopatch Client Broker Upgrader: invoked for feature upgrade orchestration (setup phases) rather than monthly quality updates; Autopatch runs multi‑phase feature releases with ring control. [learn.microsoft.com]
+* Intune Management Extension (IME): executes PowerShell / Win32 app–based remediations and deployments used by Autopatch (e.g., readiness scripts, remediation for policy conflicts). [learn.microsoft.com], [learn.microsoft.com]
+* Windows Update client policies / Windows Update for Business (WUfB): controls offering, deferrals, deadlines, ring rollout for quality & feature updates. [learn.microsoft.com]
+* Windows Update Agent (WUA): the system downloads and installs update payloads via API/workflows; installation events and status are recorded in logs. [learn.microsoft.com]
+* Delivery Optimization (DO): performs P2P and cache‑assisted content distribution to reduce bandwidth when WUA downloads updates/upgrades. [learn.microsoft.com], [learn.microsoft.com]
+* Connected User Experiences & Telemetry (DiagTrack): sends diagnostic/telemetry used for Autopatch and update reporting/compliance signals. [learn.microsoft.com]
+* Windows Autopatch service (cloud orchestration in Intune): manages rings, release schedules, reporting, and readiness checks across devices. [learn.microsoft.com], [learn.microsoft.com]
+* Windows Setup / SetupDiag (Feature Update only): Setup.exe executes Downlevel → SafeOS → First Boot → Second Boot phases; SetupDiag analyzes failures automatically. [learn.microsoft.com], [github.com]
+Note: LTSC devices are managed for quality updates only; feature updates aren’t offered via Autopatch/WU client policies. [learn.microsoft.com], [video2.ski...cademy.com]
+
+Diagram 1 — Quality Update process (includes all components)
+(Rendered above. It shows: Autopatch service schedules → device assignment/rings → IME & readiness → WUA offer → Client Broker coordinates & reports → DO assists download → install → telemetry reporting/compliance.)
+
+🖼️ Diagram 2 — Feature Update process (includes all components)
+I’ll generate the second chart now—Feature Update end‑to‑end, including Client Broker Upgrader and Windows Setup / SetupDiag.
+
+
+Wichtige Systemkomponenten im Autopatch-Prozess
+1. Windows Autopatch Client Broker
+    * Kernkomponente für Kommunikation mit dem Autopatch-Dienst.
+    * Steuert Update- und Upgrade-Abläufe.
+2. Windows Autopatch Client Broker Upgrader
+    * Aktiv bei Feature-Upgrades (z. B. 22H2 → 24H2).
+    * Führt Setup.exe aus und überwacht Upgrade-Phasen.
+3. Intune Management Extension (IME)
+    * Führt Skripte und Remediation-Aufgaben aus.
+    * Wird für Autopatch-Registrierung und Policy-Anwendung genutzt.
+4. Windows Update Agent (WUA)
+    * Verantwortlich für den Download und die Installation von Updates.
+    * Arbeitet mit WUfB (Windows Update for Business).
+5. Delivery Optimization Service
+    * Optimiert die Verteilung von Update-Paketen (Peer-to-Peer).
+6. Microsoft Connected User Experiences and Telemetry (DiagTrack)
+    * Sendet Telemetrie-Daten an Autopatch für Status und Fehleranalyse.
+7. Autopatch Orchestrator (Cloud)
+    * Kein lokaler Dienst, aber wichtig: steuert die Ringe und Zeitpläne aus der Cloud.
+
+💡 Für Feature Updates ist zusätzlich der Setup Engine (Windows Setup.exe) beteiligt, der vom Upgrader angestoßen wird.
+
+
+
+￼
+error-handling paths included:
+1. Quality Update process (monthly cumulative updates) – includes: Autopatch service (cloud), Intune Management Extension (IME), Windows Autopatch Client Broker, Windows Update Agent (WUA), Delivery Optimization, and Connected User Experiences & Telemetry (DiagTrack). Error branches cover: device not ready, policy conflicts, network/DO fallback, WUA download/install errors, and Autopatch release pause.
+2. Feature Update process (OS in‑place upgrade) – includes all above plus Client Broker Upgrader and Windows Setup/SetupDiag; error branches cover: pre‑check failure, Setup phase failures (SafeOS/First/Second Boot), automatic rollback, Autopatch pause/safeguard, and support log collection.
+
+Error-handling paths (concise guide)
+Quality Updates
+* Device Not Ready → Remediate via IME scripts (remove GPO/ConfigMgr conflicts, ensure recent Intune check-in); Autopatch Device Readiness reports show causes and next actions. citePost‑device registration readiness checksStart using Windows Autopatch
+* Policy conflicts (WUfB/GPO/ConfigMgr) → Detect & fix with remediation scripts via Intune (IME). citeWindows Update client policies (formerly WUfB)Intune IME & scripts
+* Network/Delivery Optimization issues → DO falls back to HTTP source; verify endpoints/ports and proxy bypass for DO service. citeWhat is Delivery OptimizationConfigure DO & endpoints
+* WUA download/installation errors → Inspect WindowsUpdateClient events; retry via Autopatch ring schedule; pause release if necessary. citeWindows Update Agent APIQuality update release overview
+Feature Updates
+* Pre‑check/Readiness fail (hardware, storage, BitLocker policy, etc.) → Autopatch marks Not Ready; remediate and re-evaluate. citeFeature update overview & phasesReadiness checks
+* Setup phase failure (Downlevel/SafeOS/First/Second Boot) → SetupDiag runs automatically to identify the root cause; perform corrective action (e.g., EFI/system partition conflicts, drivers), then retry. citeSetupDiagWindows upgrade phases explained
+* Automatic rollback → Windows Setup reverts to previous OS if fatal error; review SetupDiagResults.xml and Panther logs; retry after fix. citeSetupDiag
+* Autopatch pause / safeguard holds → Service can pause rings or hold content based on telemetry signals; resume after Microsoft publishes mitigations. citeStart using Autopatch (release & reporting)Feature update release statuses
+* Support log collection → The Client Broker enables automated log collection when you file a support request via Intune’s Help & Support. citeClient Broker (install & support logs)Submit a support request
+
+Notes for your UEM TaskForce (based on your role)
+* For 24H2 rollouts, use multi‑phase releases and leverage Device Readiness to pre‑empt failures. Add IME remediation for common blockers (e.g., legacy WU settings, storage thresholds). citeFeature update multi‑phaseReadiness checks
+* Keep Client Broker deployed tenant‑wide; it’s now a Win32 app for reliable install and on‑demand scoped deployments. citeClient Broker docs

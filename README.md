@@ -17,6 +17,7 @@ This Intune Proactive Remediation package automatically detects and resolves Win
 - Legacy ConfigMgr/WSUS artifacts blocking Autopatch
 - Intune Management Extension sync issues
 - Windows Autopatch configuration problems
+- Windows Autopatch Client Broker installation and functionality
 - Low disk space and pending reboots
 - Windows Update database corruption
 
@@ -82,6 +83,7 @@ Comprehensive health check that detects:
 - Legacy ConfigMgr/WSUS remnants
 - Intune enrollment and policy sync status
 - Windows Autopatch configuration
+- Windows Autopatch Client Broker installation status
 - Pending reboots and system file corruption
 - Network connectivity to Windows Update servers
 
@@ -98,6 +100,8 @@ Automated repair actions including:
 - DLL re-registration (Windows Update components)
 - Intune Management Extension service restart and sync trigger
 - Windows Autopatch configuration refresh
+- Windows Autopatch Client Broker installation trigger and verification
+- Client Broker process and service health checks
 - Group Policy and Windows Update policy refresh
 - Disk cleanup (old Windows Update files)
 - Windows Update Agent reset
@@ -200,17 +204,25 @@ This solution specifically addresses common issues when migrating from Configura
 - **WUServer** - WSUS server URL that redirects updates away from cloud services
 - **UseWUServer** - Registry value that forces use of WSUS instead of Windows Update
 
+### Windows Autopatch Client Broker
+- **Detection** - Checks if the Autopatch Client Broker is installed when Autopatch is enabled
+- **Installation Trigger** - Automatically triggers Intune sync to deploy missing Client Broker
+- **Functionality Verification** - Verifies broker process and services are running
+- **Auto-Remediation** - Starts broker process/services if stopped
+
 ### Common Migration Scenarios
 1. **Co-Management enabled** but Software Update client settings still active in ConfigMgr
 2. **Control slider moved to Intune** but registry artifacts remain
 3. **GPO remnants** from previous WSUS deployments
 4. **Hybrid environments** with mixed update sources
+5. **Autopatch enrolled** but Client Broker not deployed
 
 ### Best Practices
 - Ensure ConfigMgr Software Update client settings are disabled for Autopatch devices
 - Target Autopatch devices with client settings that disable Windows and Office updates
 - Run this remediation regularly to catch configuration drift
 - Monitor log files for recurring WSUS configuration detections
+- Verify Autopatch Client Broker installation after enrollment (typically deploys within 30-60 minutes)
 
 For more information, see [Microsoft's Conflicting Configurations Documentation](https://learn.microsoft.com/en-us/windows/deployment/windows-autopatch/references/windows-autopatch-conflicting-configurations).
 
@@ -235,6 +247,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Implemented Intune/Autopatch sync checks and fixes
 - Added WSUS configuration detection and removal (WUServer, UseWUServer)
 - Support for ConfigMgr/WSUS to Intune migration scenarios
+- Windows Autopatch Client Broker detection and installation trigger
+- Client Broker process and service health verification
 - Enhanced logging to IntuneManagementExtension directory
 - Added disk cleanup functionality
 - Registry policy block removal

@@ -224,6 +224,39 @@ try {
             if ($autopatchEnabled -ne 1) {
                 $issues += "Windows Autopatch is not properly enabled"
             }
+            
+            # Check if Windows Autopatch Client Broker is installed
+            $autopatchBrokerInstalled = $false
+            $autopatchBrokerPaths = @(
+                "C:\Program Files\Microsoft Windows Autopatch\WindowsAutopatchClientBroker.exe",
+                "C:\Program Files (x86)\Microsoft Windows Autopatch\WindowsAutopatchClientBroker.exe"
+            )
+            
+            foreach ($path in $autopatchBrokerPaths) {
+                if (Test-Path $path) {
+                    $autopatchBrokerInstalled = $true
+                    Write-Log "Windows Autopatch Client Broker found at: $path"
+                    break
+                }
+            }
+            
+            if (-not $autopatchBrokerInstalled) {
+                # Check via installed programs (alternative method)
+                $autopatchApp = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue | 
+                    Where-Object { $_.DisplayName -like "*Windows Autopatch*" -or $_.DisplayName -like "*Autopatch Client Broker*" }
+                
+                if (-not $autopatchApp) {
+                    # Check 32-bit registry on 64-bit systems
+                    $autopatchApp = Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue | 
+                        Where-Object { $_.DisplayName -like "*Windows Autopatch*" -or $_.DisplayName -like "*Autopatch Client Broker*" }
+                }
+                
+                if ($autopatchApp) {
+                    Write-Log "Windows Autopatch Client Broker is installed (Version: $($autopatchApp.DisplayVersion))"
+                } else {
+                    $issues += "Windows Autopatch Client Broker is not installed (Autopatch enabled but broker missing)"
+                }
+            }
         }
         else {
             # Autopatch registry may not exist if not configured, this is informational
