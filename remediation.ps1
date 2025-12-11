@@ -76,16 +76,59 @@ if ($freeSpaceGB -lt 20) {
     Write-Log "Warning: Low disk space. Minimum 20 GB recommended for upgrade."
 }
 
-# Stop all Windows Update related services
-Write-Log "Stopping Windows Update services..."
-$servicesToStop = @('BITS', 'wuauserv', 'CryptSvc', 'msiserver')
-foreach ($svc in $servicesToStop) {
-    try {
-        Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue
-        Write-Log "Stopped service: $svc"
-    } catch {
-        Write-Log "Could not stop service $svc`: $($_.Exception.Message)"
+# Function to check if Windows Update components need reset
+function Test-WUComponentsNeedReset {
+    $needsReset = $false
+    
+    # Check if SoftwareDistribution has too many stuck files
+    $downloadFolder = "C:\Windows\SoftwareDistribution\Download"
+    if (Test-Path $downloadFolder) {
+        $downloadFiles = Get-ChildItem $downloadFolder -ErrorAction SilentlyContinue
+        if ($downloadFiles.Count -gt 50) {
+            Write-Log "SoftwareDistribution has $($downloadFiles.Count) files - reset needed"
+            $needsReset = $true
+        }
     }
+    
+    # Check if catroot2 is missing or corrupted
+    if (-not (Test-Path "C:\Windows\System32\catroot2")) {
+        Write-Log "catroot2 folder is missing - reset needed"
+        $needsReset = $true
+    }
+    
+    return $needsReset
+}
+
+# Function to check if services are not running
+function Test-ServicesNeedRestart {
+    $servicesNeedingRestart = @()
+    $servicesToCheck = @('BITS', 'wuauserv', 'CryptSvc', 'msiserver')
+    
+    foreach ($svc in $servicesToCheck) {
+        $service = Get-Service -Name $svc -ErrorAction SilentlyContinue
+        if ($service -and $service.Status -ne "Running") {
+            $servicesNeedingRestart += $svc
+        }
+    }
+    
+    return $servicesNeedingRestart
+}
+
+# Check if services need to be restarted
+$servicesNeedingRestart = Test-ServicesNeedRestart
+if ($servicesNeedingRestart.Count -gt 0) {
+    Write-Log "Services not running: $($servicesNeedingRestart -join ', ') - Stopping and restarting..."
+    $servicesToStop = @('BITS', 'wuauserv', 'CryptSvc', 'msiserver')
+    foreach ($svc in $servicesToStop) {
+        try {
+            Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue
+            Write-Log "Stopped service: $svc"
+        } catch {
+            Write-Log "Could not stop service $svc`: $($_.Exception.Message)"
+        }
+    }
+} else {
+    Write-Log "All Windows Update services are running - skipping service restart"
 }
 
 # Optional: Run DISM health scan and repair (only if $fullRepair = 1)
@@ -117,17 +160,21 @@ if ($fullRepair -eq 1) {
     Write-Log "Full repair mode disabled (set `$fullRepair = 1 to enable DISM and SFC scans)"
 }
 
-# Reset Windows Update components
-Write-Log "Resetting Windows Update components..."
-Stop-Service -Name BITS -Force -Verbose -ErrorAction SilentlyContinue
-Stop-Service -Name wuauserv -Force -Verbose -ErrorAction SilentlyContinue
-#net stop appidsvc
-#net stop cryptsvc
+# Reset Windows Update components only if needed
+if (Test-WUComponentsNeedReset) {
+    Write-Log "Resetting Windows Update components..."
+    Stop-Service -Name BITS -Force -Verbose -ErrorAction SilentlyContinue
+    Stop-Service -Name wuauserv -Force -Verbose -ErrorAction SilentlyContinue
+    
+    Remove-Item -Path "C:\Windows\SoftwareDistribution" -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -Path "C:\Windows\System32\catroot2" -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Log "Windows Update components reset completed"
+} else {
+    Write-Log "Windows Update components are healthy - skipping reset"
+}
 
-Remove-Item -Path "C:\Windows\SoftwareDistribution" -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -Path "C:\Windows\System32\catroot2" -Recurse -Force -ErrorAction SilentlyContinue
-
-# List of registry keys to be deleted
+# Check if registry keys exist before attempting deletion
+$registryKeysDeleted = 0
 $registryKeys = @(
     "HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Update",
     "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection",
@@ -141,22 +188,45 @@ foreach ($key in $registryKeys) {
         try {
             Remove-Item -Path $key -Recurse -Force -ErrorAction Stop
             Write-Log "Successfully deleted: $key"
+            $registryKeysDeleted++
         } catch {
             Write-Log "Error deleting $key`: $($_.Exception.Message)"
         }
-    } else {
-        Write-Log "Key not found: $key"
     }
 }
 
-Start-Service -Name BITS -Verbose -ErrorAction SilentlyContinue
-Start-Service -Name wuauserv -Verbose -ErrorAction SilentlyContinue
-Start-Service -Name CryptSvc -Verbose -ErrorAction SilentlyContinue
-Start-Service -Name msiserver -Verbose -ErrorAction SilentlyContinue
-Write-Log "Windows Update services restarted"
+if ($registryKeysDeleted -eq 0) {
+    Write-Log "No problematic registry keys found - skipping registry cleanup"
+} else {
+    Write-Log "Deleted $registryKeysDeleted problematic registry keys"
+}
 
-# Re-register Windows Update DLLs
-Write-Log "Re-registering Windows Update DLLs..."
+# Restart services only if they were stopped
+if ($servicesNeedingRestart.Count -gt 0) {
+    Start-Service -Name BITS -Verbose -ErrorAction SilentlyContinue
+    Start-Service -Name wuauserv -Verbose -ErrorAction SilentlyContinue
+    Start-Service -Name CryptSvc -Verbose -ErrorAction SilentlyContinue
+    Start-Service -Name msiserver -Verbose -ErrorAction SilentlyContinue
+    Write-Log "Windows Update services restarted"
+}
+
+# Re-register Windows Update DLLs only if Windows Update COM interface is not accessible
+$needDllReregistration = $false
+try {
+    $updateSession = New-Object -ComObject Microsoft.Update.Session -ErrorAction SilentlyContinue
+    if (-not $updateSession) {
+        $needDllReregistration = $true
+        Write-Log "Windows Update COM interface not accessible - DLL re-registration needed"
+    } else {
+        Write-Log "Windows Update COM interface is accessible - skipping DLL re-registration"
+    }
+} catch {
+    $needDllReregistration = $true
+    Write-Log "Windows Update COM test failed - DLL re-registration needed"
+}
+
+if ($needDllReregistration) {
+    Write-Log "Re-registering Windows Update DLLs..."
 $dlls = @(
     "atl.dll", "urlmon.dll", "mshtml.dll", "shdocvw.dll", "browseui.dll",
     "jscript.dll", "vbscript.dll", "scrrun.dll", "msxml.dll", "msxml3.dll",
@@ -175,12 +245,19 @@ foreach ($dll in $dlls) {
     }
 }
 Write-Log "DLL re-registration completed"
+}
 
-# Restart Intune Management Extension service to trigger policy sync
-Write-Log "Restarting Intune Management Extension service..."
+# Restart Intune Management Extension service only if not running
+Write-Log "Checking Intune Management Extension service..."
 try {
-    Restart-Service -Name IntuneManagementExtension -Force -ErrorAction Stop
-    Write-Log "Intune Management Extension service restarted successfully"
+    $intuneService = Get-Service -Name IntuneManagementExtension -ErrorAction SilentlyContinue
+    if ($intuneService -and $intuneService.Status -ne "Running") {
+        Write-Log "Intune Management Extension service is not running - restarting..."
+        Restart-Service -Name IntuneManagementExtension -Force -ErrorAction Stop
+        Write-Log "Intune Management Extension service restarted successfully"
+    } else {
+        Write-Log "Intune Management Extension service is already running - skipping restart"
+    }
 } catch {
     Write-Log "Failed to restart Intune Management Extension: $($_.Exception.Message)"
 }
@@ -403,39 +480,41 @@ try {
     Write-Log "Error clearing Windows Update cache: $($_.Exception.Message)"
 }
 
-# Check and remove setup registry block
+# Check and remove setup registry block only if it exists
 Write-Log "Checking for setup registry blocks..."
 try {
-    $setupBlock = Get-ItemProperty -Path "HKLM:\SYSTEM\Setup" -ErrorAction SilentlyContinue
+    $setupBlock = Get-ItemProperty -Path "HKLM:\SYSTEM\Setup" -Name "SetupType" -ErrorAction SilentlyContinue
     if ($setupBlock -and $setupBlock.SetupType -and $setupBlock.SetupType -ne 0) {
-        Write-Log "Setup registry block detected: SetupType = $($setupBlock.SetupType) - Attempting to remove..."
+        Write-Log "Setup registry block detected: SetupType = $($setupBlock.SetupType) - Removing..."
         Remove-ItemProperty -Path "HKLM:\SYSTEM\Setup" -Name "SetupType" -Force -ErrorAction Stop
         Write-Log "Successfully removed SetupType registry block"
     } else {
-        Write-Log "No SetupType registry block found"
+        Write-Log "No SetupType registry block found - skipping"
     }
 } catch {
-    Write-Log "Error removing setup registry block: $($_.Exception.Message)"
+    Write-Log "Error checking/removing setup registry block: $($_.Exception.Message)"
 }
 
-# Clear pending reboot flags (where safe to do so)
-Write-Log "Checking and clearing safe reboot flags..."
+# Clear pending reboot flags only if they exist
+Write-Log "Checking for pending reboot flags..."
+$rebootFlagsCleared = $false
 try {
-    # Remove Component Based Servicing RebootPending flag if it exists
     if (Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending") {
         Remove-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending" -Force -ErrorAction SilentlyContinue
         Write-Log "Cleared Component Based Servicing RebootPending flag"
+        $rebootFlagsCleared = $true
     }
     
-    # Note: We do NOT remove Windows Update RebootRequired as this could cause issues
-    # Note: We do NOT remove PendingFileRenameOperations as this could break system stability
-    Write-Log "Reboot flag cleanup completed (safe flags only)"
+    if (-not $rebootFlagsCleared) {
+        Write-Log "No safe reboot flags found - skipping"
+    }
 } catch {
     Write-Log "Error clearing reboot flags: $($_.Exception.Message)"
 }
 
-# Verify and start critical services
-Write-Log "Verifying all critical services are running..."
+# Verify and start critical services only if they are not running
+Write-Log "Verifying critical services..."
+$servicesFixed = 0
 $criticalServices = @{
     'wuauserv' = 'Windows Update'
     'BITS' = 'Background Intelligent Transfer Service'
@@ -452,8 +531,7 @@ foreach ($svcName in $criticalServices.Keys) {
                 Write-Log "Service $($criticalServices[$svcName]) is not running - Starting..."
                 Start-Service -Name $svcName -ErrorAction Stop
                 Write-Log "Successfully started $($criticalServices[$svcName])"
-            } else {
-                Write-Log "Service $($criticalServices[$svcName]) is already running"
+                $servicesFixed++
             }
             
             # Ensure service is set to automatic start (except TrustedInstaller which is Manual)
@@ -462,6 +540,7 @@ foreach ($svcName in $criticalServices.Keys) {
                 if ($startupType -ne 'Automatic') {
                     Set-Service -Name $svcName -StartupType Automatic -ErrorAction SilentlyContinue
                     Write-Log "Set $($criticalServices[$svcName]) to Automatic startup"
+                    $servicesFixed++
                 }
             }
         } else {
@@ -472,7 +551,11 @@ foreach ($svcName in $criticalServices.Keys) {
     }
 }
 
-# Enable App Readiness Service if disabled
+if ($servicesFixed -eq 0) {
+    Write-Log "All critical services are running and properly configured - skipping"
+}
+
+# Enable App Readiness Service only if it's disabled
 Write-Log "Checking App Readiness Service..."
 try {
     $appReadiness = Get-Service -Name AppReadiness -ErrorAction SilentlyContinue
@@ -482,54 +565,60 @@ try {
             Set-Service -Name AppReadiness -StartupType Manual -ErrorAction Stop
             Write-Log "App Readiness Service enabled (set to Manual)"
         } else {
-            Write-Log "App Readiness Service startup type: $($appReadiness.StartType)"
+            Write-Log "App Readiness Service is properly configured ($($appReadiness.StartType)) - skipping"
         }
     }
 } catch {
     Write-Log "Error configuring App Readiness Service: $($_.Exception.Message)"
 }
 
-# Cleanup disk space - Remove old Windows Update files
-Write-Log "Cleaning up disk space..."
+# Cleanup disk space only if free space is low (< 20 GB)
+Write-Log "Checking disk space..."
 try {
     $sysDrive = Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='C:'"
     $freeSpaceGBBefore = [math]::Round($sysDrive.FreeSpace / 1GB, 2)
-    Write-Log "Free disk space before cleanup: $freeSpaceGBBefore GB"
+    Write-Log "Free disk space: $freeSpaceGBBefore GB"
     
-    # Run Disk Cleanup to remove old Windows Update files
-    if (Test-Path "$env:SystemRoot\System32\cleanmgr.exe") {
-        Write-Log "Running Disk Cleanup for Windows Update files..."
+    if ($freeSpaceGBBefore -lt 20) {
+        Write-Log "Low disk space detected - Running cleanup..."
         
-        # Set registry keys for automated cleanup
-        $volumeCaches = @(
-            "Update Cleanup",
-            "Windows Update Cleanup",
-            "Temporary Setup Files"
-        )
-        
-        foreach ($cache in $volumeCaches) {
-            $regPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches\$cache"
-            if (Test-Path $regPath) {
-                Set-ItemProperty -Path $regPath -Name StateFlags0100 -Value 2 -Type DWord -ErrorAction SilentlyContinue
+        # Run Disk Cleanup to remove old Windows Update files
+        if (Test-Path "$env:SystemRoot\System32\cleanmgr.exe") {
+            Write-Log "Running Disk Cleanup for Windows Update files..."
+            
+            # Set registry keys for automated cleanup
+            $volumeCaches = @(
+                "Update Cleanup",
+                "Windows Update Cleanup",
+                "Temporary Setup Files"
+            )
+            
+            foreach ($cache in $volumeCaches) {
+                $regPath = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\VolumeCaches\$cache"
+                if (Test-Path $regPath) {
+                    Set-ItemProperty -Path $regPath -Name StateFlags0100 -Value 2 -Type DWord -ErrorAction SilentlyContinue
+                }
             }
+            
+            # Run cleanmgr with automated settings in hidden mode
+            Start-Process -FilePath "$env:SystemRoot\System32\cleanmgr.exe" -ArgumentList "/sagerun:100" -Wait -NoNewWindow -WindowStyle Hidden -ErrorAction SilentlyContinue
+            Write-Log "Disk Cleanup completed"
+            
+            # Check free space after cleanup
+            $sysDrive = Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='C:'"
+            $freeSpaceGBAfter = [math]::Round($sysDrive.FreeSpace / 1GB, 2)
+            $freedSpace = $freeSpaceGBAfter - $freeSpaceGBBefore
+            Write-Log "Free disk space after cleanup: $freeSpaceGBAfter GB (freed: $([math]::Round($freedSpace, 2)) GB)"
         }
-        
-        # Run cleanmgr with automated settings in hidden mode
-        Start-Process -FilePath "$env:SystemRoot\System32\cleanmgr.exe" -ArgumentList "/sagerun:100" -Wait -NoNewWindow -WindowStyle Hidden -ErrorAction SilentlyContinue
-        Write-Log "Disk Cleanup completed"
-        
-        # Check free space after cleanup
-        $sysDrive = Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='C:'"
-        $freeSpaceGBAfter = [math]::Round($sysDrive.FreeSpace / 1GB, 2)
-        $freedSpace = $freeSpaceGBAfter - $freeSpaceGBBefore
-        Write-Log "Free disk space after cleanup: $freeSpaceGBAfter GB (freed: $([math]::Round($freedSpace, 2)) GB)"
+    } else {
+        Write-Log "Sufficient disk space available - skipping cleanup"
     }
 } catch {
-    Write-Log "Error during disk cleanup: $($_.Exception.Message)"
+    Write-Log "Error during disk space check/cleanup: $($_.Exception.Message)"
 }
 
-# Remove Windows Update policy blocks
-Write-Log "Removing Windows Update policy blocks..."
+# Remove Windows Update policy blocks only if they exist
+Write-Log "Checking for Windows Update policy blocks..."
 try {
     $policyBlocks = @(
         @{Path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"; Name = "DoNotConnectToWindowsUpdateInternetLocations"},
@@ -539,33 +628,60 @@ try {
         @{Path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU"; Name = "NoAutoUpdate"}
     )
     
+    $blocksRemoved = 0
     foreach ($block in $policyBlocks) {
         if (Test-Path $block.Path) {
             $value = Get-ItemProperty -Path $block.Path -Name $block.Name -ErrorAction SilentlyContinue
             if ($value) {
                 Remove-ItemProperty -Path $block.Path -Name $block.Name -Force -ErrorAction SilentlyContinue
                 Write-Log "Removed policy block: $($block.Path)\$($block.Name)"
+                $blocksRemoved++
             }
         }
+    }
+    
+    if ($blocksRemoved -eq 0) {
+        Write-Log "No Windows Update policy blocks found - skipping"
+    } else {
+        Write-Log "Removed $blocksRemoved policy blocks"
     }
 } catch {
     Write-Log "Error removing policy blocks: $($_.Exception.Message)"
 }
 
-# Reset Windows Update Agent
-Write-Log "Resetting Windows Update Agent..."
+# Reset Windows Update Agent only if COM interface is not accessible
+Write-Log "Checking Windows Update Agent health..."
 try {
-    # Stop Windows Update service
-    Stop-Service -Name wuauserv -Force -ErrorAction SilentlyContinue
+    $needsReset = $false
+    $updateSession = New-Object -ComObject Microsoft.Update.Session -ErrorAction SilentlyContinue
     
-    # Remove Windows Update registry keys to force re-initialization
-    Remove-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate" -Recurse -Force -ErrorAction SilentlyContinue
+    if (-not $updateSession) {
+        $needsReset = $true
+    } else {
+        try {
+            $updateSearcher = $updateSession.CreateUpdateSearcher()
+            $null = $updateSearcher.Search("IsInstalled=0 and IsHidden=0")
+        } catch {
+            $needsReset = $true
+        }
+    }
     
-    # Restart Windows Update service (will recreate registry keys)
-    Start-Service -Name wuauserv -ErrorAction SilentlyContinue
-    Write-Log "Windows Update Agent reset completed"
+    if ($needsReset) {
+        Write-Log "Windows Update Agent needs reset - resetting..."
+        # Stop Windows Update service
+        Stop-Service -Name wuauserv -Force -ErrorAction SilentlyContinue
+        
+        # Remove Windows Update registry keys to force re-initialization
+        Remove-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate" -Recurse -Force -ErrorAction SilentlyContinue
+        
+        # Restart Windows Update service (will recreate registry keys)
+        Start-Service -Name wuauserv -ErrorAction SilentlyContinue
+        Write-Log "Windows Update Agent reset completed"
+    } else {
+        Write-Log "Windows Update Agent is healthy - skipping reset"
+    }
 } catch {
-    Write-Log "Error resetting Windows Update Agent: $($_.Exception.Message)"
+    Write-Log "Error checking/resetting Windows Update Agent: $($_.Exception.Message)"
 }
 
 # Verify Windows Update client health
@@ -573,15 +689,14 @@ Write-Log "Verifying Windows Update client health..."
 try {
     $updateSession = New-Object -ComObject Microsoft.Update.Session -ErrorAction SilentlyContinue
     if ($updateSession) {
-        Write-Log "Windows Update COM interface is accessible"
         $updateSearcher = $updateSession.CreateUpdateSearcher()
         $searchResult = $updateSearcher.Search("IsInstalled=0 and IsHidden=0")
-        Write-Log "Windows Update client test search completed successfully - $($searchResult.Updates.Count) updates found"
+        Write-Log "Windows Update client is functional - $($searchResult.Updates.Count) updates available"
     } else {
-        Write-Log "Warning: Windows Update COM interface not accessible"
+        Write-Log "Warning: Windows Update COM interface not accessible after remediation"
     }
 } catch {
-    Write-Log "Warning: Windows Update client health check failed: $($_.Exception.Message)"
+    Write-Log "Warning: Windows Update client health verification failed: $($_.Exception.Message)"
 }
 
 # Final service status report
