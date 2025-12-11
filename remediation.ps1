@@ -1,44 +1,160 @@
 #region PowerShell Help
 <#
 .SYNOPSIS
-    Remediation script for all Windows Update issues, repairing system components and services.
+    Intelligent remediation script for Windows Update issues with configurable repair steps.
+    Only executes repairs when problems are detected, minimizing unnecessary system changes.
 
-    GitHub Repository: https://github.com/roalhelm/
+    GitHub Repository: https://github.com/roalhelm/WindowsAutopatchFix
 
 .DESCRIPTION
-    This script remediates common Windows Update failures on Intune-managed devices. It performs:
+    This script remediates common Windows Update failures on Intune-managed devices with intelligent
+    detection and configurable repair steps. Each repair action is only executed when necessary:
+    
+    Configurable Repair Steps:
     - Windows Update component reset (SoftwareDistribution, catroot2)
-    - Service restart (BITS, wuauserv, CryptSvc, AppReadiness)
-    - DISM and SFC system repair
-    - Intune policy re-sync and configuration refresh
-    - Windows Update database cleanup
-    - Registry policy cleanup
+    - Service verification and restart (BITS, wuauserv, CryptSvc, AppReadiness)
+    - DISM and SFC system repair (optional, resource-intensive)
+    - Intune Management Extension restart
+    - Windows Autopatch configuration check and repair
+    - Registry policy cleanup (WSUS, GPO conflicts)
+    - DLL re-registration (Windows Update DLLs)
+    - Setup registry block removal
+    - Pending reboot flags cleanup
+    - Critical services verification
+    - Disk cleanup (when < 20 GB free space)
+    - Windows Update policy blocks removal
+    - Windows Update Agent reset
+    - Group Policy update
+    - Windows Update policy refresh
+    
     Addresses errors including: 0x80070002, 0x8007000E, 0x80240034, 0x8024402F, 0x80070643,
     0x800F0922, 0xC1900200, 0x80070490, 0x800F0831, and many others.
 
 .NOTES
     File Name     : remediation.ps1
     Author        : Ronny Alhelm
-    Version       : 2.0
+    Version       : 3.0
     Creation Date : 2024-09-19
+    Last Updated  : 2025-12-11
 
 .CHANGES
+    3.0 - Added intelligent detection (repairs only when needed) and configurable repair steps
     2.0 - Expanded to fix all common Windows Update errors, added comprehensive repair actions
     1.0 - Initial version (focused on 0Xc1900200)
 
 .VERSION
-    2.0
+    3.0
+
+.PARAMETER fullRepair
+    Set to 1 to enable DISM + SFC system repair (resource intensive). Default: 0
+
+.PARAMETER resetWUComponents
+    Set to 1 to enable Windows Update component reset. Default: 1
+
+.PARAMETER cleanupRegistry
+    Set to 1 to enable registry cleanup. Default: 1
+
+.PARAMETER reregisterDLLs
+    Set to 1 to enable DLL re-registration. Default: 1
+
+.PARAMETER restartIntune
+    Set to 1 to enable Intune Management Extension restart. Default: 1
+
+.PARAMETER checkAutopatch
+    Set to 1 to enable Windows Autopatch configuration check. Default: 1
+
+.PARAMETER removeSetupBlocks
+    Set to 1 to enable setup registry block removal. Default: 1
+
+.PARAMETER clearRebootFlags
+    Set to 1 to enable pending reboot flags cleanup. Default: 1
+
+.PARAMETER verifyCriticalServices
+    Set to 1 to enable critical services verification. Default: 1
+
+.PARAMETER configureAppReadiness
+    Set to 1 to enable App Readiness Service configuration. Default: 1
+
+.PARAMETER runDiskCleanup
+    Set to 1 to enable disk cleanup (only runs if < 20 GB free). Default: 1
+
+.PARAMETER removePolicyBlocks
+    Set to 1 to enable Windows Update policy blocks removal. Default: 1
+
+.PARAMETER resetWUAgent
+    Set to 1 to enable Windows Update Agent reset. Default: 1
+
+.PARAMETER updateGroupPolicy
+    Set to 1 to enable Group Policy update. Default: 1
+
+.PARAMETER refreshWUPolicies
+    Set to 1 to enable Windows Update policy refresh. Default: 1
 
 .EXAMPLE
     powershell.exe -ExecutionPolicy Bypass -File .\remediation.ps1
-    # Runs the remediation script to repair all Windows Update issues and log results.
+    # Runs with default configuration (all steps enabled except fullRepair)
+
+.EXAMPLE
+    # Edit the script to set $fullRepair = 1 for deep system repair
+    powershell.exe -ExecutionPolicy Bypass -File .\remediation.ps1
+
+.EXAMPLE
+    # Edit the script to disable specific steps (e.g., set $checkAutopatch = 0)
+    powershell.exe -ExecutionPolicy Bypass -File .\remediation.ps1
 #>
 #endregion
 
 # PowerShell Remediation Script for All Windows Update Issues
 
-# Configuration: Set to 1 to enable full system repair (DISM + SFC), set to 0 to skip
+#region Configuration - Enable/Disable Repair Steps
+# Set to 1 to enable, 0 to skip individual repair steps
+
+# Full system repair (DISM + SFC) - Resource intensive, takes several minutes
 $fullRepair = 0
+
+# Windows Update component reset (SoftwareDistribution, catroot2)
+$resetWUComponents = 1
+
+# Registry cleanup (remove problematic policy keys)
+$cleanupRegistry = 1
+
+# DLL re-registration (Windows Update DLLs)
+$reregisterDLLs = 1
+
+# Intune Management Extension restart
+$restartIntune = 1
+
+# Windows Autopatch configuration check and repair
+$checkAutopatch = 1
+
+# Setup registry block removal
+$removeSetupBlocks = 1
+
+# Pending reboot flags cleanup
+$clearRebootFlags = 1
+
+# Critical services verification and restart
+$verifyCriticalServices = 1
+
+# App Readiness Service configuration
+$configureAppReadiness = 1
+
+# Disk cleanup (only runs if < 20 GB free space)
+$runDiskCleanup = 1
+
+# Windows Update policy blocks removal
+$removePolicyBlocks = 1
+
+# Windows Update Agent reset
+$resetWUAgent = 1
+
+# Group Policy update
+$updateGroupPolicy = 1
+
+# Windows Update policy refresh
+$refreshWUPolicies = 1
+
+#endregion
 
 # Function to log output to file and console
 $global:LogPath = "C:\ProgramData\Microsoft\IntuneManagementExtension\Logs\WindowsUpdateFix_remediation.log"
@@ -161,44 +277,52 @@ if ($fullRepair -eq 1) {
 }
 
 # Reset Windows Update components only if needed
-if (Test-WUComponentsNeedReset) {
-    Write-Log "Resetting Windows Update components..."
-    Stop-Service -Name BITS -Force -Verbose -ErrorAction SilentlyContinue
-    Stop-Service -Name wuauserv -Force -Verbose -ErrorAction SilentlyContinue
-    
-    Remove-Item -Path "C:\Windows\SoftwareDistribution" -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -Path "C:\Windows\System32\catroot2" -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Log "Windows Update components reset completed"
+if ($resetWUComponents -eq 1) {
+    if (Test-WUComponentsNeedReset) {
+        Write-Log "Resetting Windows Update components..."
+        Stop-Service -Name BITS -Force -Verbose -ErrorAction SilentlyContinue
+        Stop-Service -Name wuauserv -Force -Verbose -ErrorAction SilentlyContinue
+        
+        Remove-Item -Path "C:\Windows\SoftwareDistribution" -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path "C:\Windows\System32\catroot2" -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Log "Windows Update components reset completed"
+    } else {
+        Write-Log "Windows Update components are healthy - skipping reset"
+    }
 } else {
-    Write-Log "Windows Update components are healthy - skipping reset"
+    Write-Log "Windows Update component reset disabled in configuration - skipping"
 }
 
 # Check if registry keys exist before attempting deletion
-$registryKeysDeleted = 0
-$registryKeys = @(
-    "HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Update",
-    "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection",
-    "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Appraiser\GWX",
-    "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\DisableWindowsUpdateAccess",
-    "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU\NoAutoUpdate"
-)
+if ($cleanupRegistry -eq 1) {
+    $registryKeysDeleted = 0
+    $registryKeys = @(
+        "HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Update",
+        "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection",
+        "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Appraiser\GWX",
+        "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\DisableWindowsUpdateAccess",
+        "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU\NoAutoUpdate"
+    )
 
-foreach ($key in $registryKeys) {
-    if (Test-Path $key) {
-        try {
-            Remove-Item -Path $key -Recurse -Force -ErrorAction Stop
-            Write-Log "Successfully deleted: $key"
-            $registryKeysDeleted++
-        } catch {
-            Write-Log "Error deleting $key`: $($_.Exception.Message)"
+    foreach ($key in $registryKeys) {
+        if (Test-Path $key) {
+            try {
+                Remove-Item -Path $key -Recurse -Force -ErrorAction Stop
+                Write-Log "Successfully deleted: $key"
+                $registryKeysDeleted++
+            } catch {
+                Write-Log "Error deleting $key`: $($_.Exception.Message)"
+            }
         }
     }
-}
 
-if ($registryKeysDeleted -eq 0) {
-    Write-Log "No problematic registry keys found - skipping registry cleanup"
+    if ($registryKeysDeleted -eq 0) {
+        Write-Log "No problematic registry keys found - skipping registry cleanup"
+    } else {
+        Write-Log "Deleted $registryKeysDeleted problematic registry keys"
+    }
 } else {
-    Write-Log "Deleted $registryKeysDeleted problematic registry keys"
+    Write-Log "Registry cleanup disabled in configuration - skipping"
 }
 
 # Restart services only if they were stopped
@@ -211,22 +335,23 @@ if ($servicesNeedingRestart.Count -gt 0) {
 }
 
 # Re-register Windows Update DLLs only if Windows Update COM interface is not accessible
-$needDllReregistration = $false
-try {
-    $updateSession = New-Object -ComObject Microsoft.Update.Session -ErrorAction SilentlyContinue
-    if (-not $updateSession) {
+if ($reregisterDLLs -eq 1) {
+    $needDllReregistration = $false
+    try {
+        $updateSession = New-Object -ComObject Microsoft.Update.Session -ErrorAction SilentlyContinue
+        if (-not $updateSession) {
+            $needDllReregistration = $true
+            Write-Log "Windows Update COM interface not accessible - DLL re-registration needed"
+        } else {
+            Write-Log "Windows Update COM interface is accessible - skipping DLL re-registration"
+        }
+    } catch {
         $needDllReregistration = $true
-        Write-Log "Windows Update COM interface not accessible - DLL re-registration needed"
-    } else {
-        Write-Log "Windows Update COM interface is accessible - skipping DLL re-registration"
+        Write-Log "Windows Update COM test failed - DLL re-registration needed"
     }
-} catch {
-    $needDllReregistration = $true
-    Write-Log "Windows Update COM test failed - DLL re-registration needed"
-}
 
-if ($needDllReregistration) {
-    Write-Log "Re-registering Windows Update DLLs..."
+    if ($needDllReregistration) {
+        Write-Log "Re-registering Windows Update DLLs..."
 $dlls = @(
     "atl.dll", "urlmon.dll", "mshtml.dll", "shdocvw.dll", "browseui.dll",
     "jscript.dll", "vbscript.dll", "scrrun.dll", "msxml.dll", "msxml3.dll",
@@ -237,29 +362,36 @@ $dlls = @(
     "wuweb.dll", "qmgr.dll", "qmgrprxy.dll", "wucltux.dll", "muweb.dll", "wuwebv.dll"
 )
 
-foreach ($dll in $dlls) {
-    try {
-        $regResult = & regsvr32.exe /s $dll 2>&1
-    } catch {
-        # Some DLLs may not exist on all systems, continue
+    foreach ($dll in $dlls) {
+        try {
+            $regResult = & regsvr32.exe /s $dll 2>&1
+        } catch {
+            # Some DLLs may not exist on all systems, continue
+        }
     }
-}
-Write-Log "DLL re-registration completed"
+    Write-Log "DLL re-registration completed"
+    }
+} else {
+    Write-Log "DLL re-registration disabled in configuration - skipping"
 }
 
 # Restart Intune Management Extension service only if not running
-Write-Log "Checking Intune Management Extension service..."
-try {
-    $intuneService = Get-Service -Name IntuneManagementExtension -ErrorAction SilentlyContinue
-    if ($intuneService -and $intuneService.Status -ne "Running") {
-        Write-Log "Intune Management Extension service is not running - restarting..."
-        Restart-Service -Name IntuneManagementExtension -Force -ErrorAction Stop
-        Write-Log "Intune Management Extension service restarted successfully"
-    } else {
-        Write-Log "Intune Management Extension service is already running - skipping restart"
+if ($restartIntune -eq 1) {
+    Write-Log "Checking Intune Management Extension service..."
+    try {
+        $intuneService = Get-Service -Name IntuneManagementExtension -ErrorAction SilentlyContinue
+        if ($intuneService -and $intuneService.Status -ne "Running") {
+            Write-Log "Intune Management Extension service is not running - restarting..."
+            Restart-Service -Name IntuneManagementExtension -Force -ErrorAction Stop
+            Write-Log "Intune Management Extension service restarted successfully"
+        } else {
+            Write-Log "Intune Management Extension service is already running - skipping restart"
+        }
+    } catch {
+        Write-Log "Failed to restart Intune Management Extension: $($_.Exception.Message)"
     }
-} catch {
-    Write-Log "Failed to restart Intune Management Extension: $($_.Exception.Message)"
+} else {
+    Write-Log "Intune Management Extension restart disabled in configuration - skipping"
 }
 
 # Trigger Intune policy sync
@@ -294,8 +426,9 @@ try {
 }
 
 # Check and refresh Windows Autopatch configuration
-Write-Log "Checking Windows Autopatch configuration..."
-try {
+if ($checkAutopatch -eq 1) {
+    Write-Log "Checking Windows Autopatch configuration..."
+    try {
     $autopatchRegPath = "HKLM:\SOFTWARE\Microsoft\Windows\Autopatch"
     
     if (Test-Path $autopatchRegPath) {
@@ -437,85 +570,105 @@ try {
     } else {
         Write-Log "Windows Autopatch registry not found (device may not be enrolled in Autopatch)"
     }
-} catch {
-    Write-Log "Error checking/refreshing Autopatch configuration: $($_.Exception.Message)"
+    } catch {
+        Write-Log "Error checking/refreshing Autopatch configuration: $($_.Exception.Message)"
+    }
+} else {
+    Write-Log "Windows Autopatch check disabled in configuration - skipping"
 }
 
 # Force Group Policy update to apply any Intune-delivered policies
-Write-Log "Forcing Group Policy update..."
-try {
-    $gpUpdateOutput = & gpupdate.exe /force 2>&1
-    Write-Log "Group Policy updated: $gpUpdateOutput"
-} catch {
-    Write-Log "Error running gpupdate: $($_.Exception.Message)"
+if ($updateGroupPolicy -eq 1) {
+    Write-Log "Forcing Group Policy update..."
+    try {
+        $gpUpdateOutput = & gpupdate.exe /force 2>&1
+        Write-Log "Group Policy updated: $gpUpdateOutput"
+    } catch {
+        Write-Log "Error running gpupdate: $($_.Exception.Message)"
+    }
+} else {
+    Write-Log "Group Policy update disabled in configuration - skipping"
 }
 
 # Trigger Windows Update policy refresh
-Write-Log "Refreshing Windows Update policies..."
-try {
-    # Reset Windows Update policy cache
-    Remove-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results" -Recurse -Force -ErrorAction SilentlyContinue
-    
-    # Use USOClient to check for updates and refresh policies
-    if (Test-Path "$env:windir\System32\UsoClient.exe") {
-        Start-Process -FilePath "$env:windir\System32\UsoClient.exe" -ArgumentList "ScanInstallWait" -NoNewWindow -ErrorAction SilentlyContinue
-        Write-Log "Windows Update scan triggered via UsoClient"
+if ($refreshWUPolicies -eq 1) {
+    Write-Log "Refreshing Windows Update policies..."
+    try {
+        # Reset Windows Update policy cache
+        Remove-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results" -Recurse -Force -ErrorAction SilentlyContinue
+        
+        # Use USOClient to check for updates and refresh policies
+        if (Test-Path "$env:windir\System32\UsoClient.exe") {
+            Start-Process -FilePath "$env:windir\System32\UsoClient.exe" -ArgumentList "ScanInstallWait" -NoNewWindow -ErrorAction SilentlyContinue
+            Write-Log "Windows Update scan triggered via UsoClient"
+        }
+        
+        # Alternative: Use wuauclt if available (legacy)
+        Start-Process -FilePath "wuauclt.exe" -ArgumentList "/detectnow", "/updatenow" -NoNewWindow -ErrorAction SilentlyContinue
+        Write-Log "Windows Update detection triggered"
+        
+    } catch {
+        Write-Log "Error refreshing Windows Update policies: $($_.Exception.Message)"
     }
-    
-    # Alternative: Use wuauclt if available (legacy)
-    Start-Process -FilePath "wuauclt.exe" -ArgumentList "/detectnow", "/updatenow" -NoNewWindow -ErrorAction SilentlyContinue
-    Write-Log "Windows Update detection triggered"
-    
-} catch {
-    Write-Log "Error refreshing Windows Update policies: $($_.Exception.Message)"
-}
 
-# Clear Windows Update cache to force re-evaluation
-Write-Log "Clearing Windows Update cache..."
-try {
-    Remove-Item -Path "$env:SystemRoot\SoftwareDistribution\DataStore\DataStore.edb" -Force -ErrorAction SilentlyContinue
-    Remove-Item -Path "$env:SystemRoot\SoftwareDistribution\DataStore\Logs\*.log" -Force -ErrorAction SilentlyContinue
-    Write-Log "Windows Update cache cleared"
-} catch {
-    Write-Log "Error clearing Windows Update cache: $($_.Exception.Message)"
+    # Clear Windows Update cache to force re-evaluation
+    Write-Log "Clearing Windows Update cache..."
+    try {
+        Remove-Item -Path "$env:SystemRoot\SoftwareDistribution\DataStore\DataStore.edb" -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path "$env:SystemRoot\SoftwareDistribution\DataStore\Logs\*.log" -Force -ErrorAction SilentlyContinue
+        Write-Log "Windows Update cache cleared"
+    } catch {
+        Write-Log "Error clearing Windows Update cache: $($_.Exception.Message)"
+    }
+} else {
+    Write-Log "Windows Update policy refresh disabled in configuration - skipping"
 }
 
 # Check and remove setup registry block only if it exists
-Write-Log "Checking for setup registry blocks..."
-try {
-    $setupBlock = Get-ItemProperty -Path "HKLM:\SYSTEM\Setup" -Name "SetupType" -ErrorAction SilentlyContinue
-    if ($setupBlock -and $setupBlock.SetupType -and $setupBlock.SetupType -ne 0) {
-        Write-Log "Setup registry block detected: SetupType = $($setupBlock.SetupType) - Removing..."
-        Remove-ItemProperty -Path "HKLM:\SYSTEM\Setup" -Name "SetupType" -Force -ErrorAction Stop
-        Write-Log "Successfully removed SetupType registry block"
-    } else {
-        Write-Log "No SetupType registry block found - skipping"
+if ($removeSetupBlocks -eq 1) {
+    Write-Log "Checking for setup registry blocks..."
+    try {
+        $setupBlock = Get-ItemProperty -Path "HKLM:\SYSTEM\Setup" -Name "SetupType" -ErrorAction SilentlyContinue
+        if ($setupBlock -and $setupBlock.SetupType -and $setupBlock.SetupType -ne 0) {
+            Write-Log "Setup registry block detected: SetupType = $($setupBlock.SetupType) - Removing..."
+            Remove-ItemProperty -Path "HKLM:\SYSTEM\Setup" -Name "SetupType" -Force -ErrorAction Stop
+            Write-Log "Successfully removed SetupType registry block"
+        } else {
+            Write-Log "No SetupType registry block found - skipping"
+        }
+    } catch {
+        Write-Log "Error checking/removing setup registry block: $($_.Exception.Message)"
     }
-} catch {
-    Write-Log "Error checking/removing setup registry block: $($_.Exception.Message)"
+} else {
+    Write-Log "Setup registry block removal disabled in configuration - skipping"
 }
 
 # Clear pending reboot flags only if they exist
-Write-Log "Checking for pending reboot flags..."
-$rebootFlagsCleared = $false
-try {
-    if (Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending") {
-        Remove-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending" -Force -ErrorAction SilentlyContinue
-        Write-Log "Cleared Component Based Servicing RebootPending flag"
-        $rebootFlagsCleared = $true
+if ($clearRebootFlags -eq 1) {
+    Write-Log "Checking for pending reboot flags..."
+    $rebootFlagsCleared = $false
+    try {
+        if (Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending") {
+            Remove-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending" -Force -ErrorAction SilentlyContinue
+            Write-Log "Cleared Component Based Servicing RebootPending flag"
+            $rebootFlagsCleared = $true
+        }
+        
+        if (-not $rebootFlagsCleared) {
+            Write-Log "No safe reboot flags found - skipping"
+        }
+    } catch {
+        Write-Log "Error clearing reboot flags: $($_.Exception.Message)"
     }
-    
-    if (-not $rebootFlagsCleared) {
-        Write-Log "No safe reboot flags found - skipping"
-    }
-} catch {
-    Write-Log "Error clearing reboot flags: $($_.Exception.Message)"
+} else {
+    Write-Log "Pending reboot flags cleanup disabled in configuration - skipping"
 }
 
 # Verify and start critical services only if they are not running
-Write-Log "Verifying critical services..."
-$servicesFixed = 0
-$criticalServices = @{
+if ($verifyCriticalServices -eq 1) {
+    Write-Log "Verifying critical services..."
+    $servicesFixed = 0
+    $criticalServices = @{
     'wuauserv' = 'Windows Update'
     'BITS' = 'Background Intelligent Transfer Service'
     'CryptSvc' = 'Cryptographic Services'
@@ -551,30 +704,38 @@ foreach ($svcName in $criticalServices.Keys) {
     }
 }
 
-if ($servicesFixed -eq 0) {
-    Write-Log "All critical services are running and properly configured - skipping"
+    if ($servicesFixed -eq 0) {
+        Write-Log "All critical services are running and properly configured - skipping"
+    }
+} else {
+    Write-Log "Critical services verification disabled in configuration - skipping"
 }
 
 # Enable App Readiness Service only if it's disabled
-Write-Log "Checking App Readiness Service..."
-try {
-    $appReadiness = Get-Service -Name AppReadiness -ErrorAction SilentlyContinue
-    if ($appReadiness) {
-        if ($appReadiness.StartType -eq "Disabled") {
-            Write-Log "App Readiness Service is disabled - Enabling..."
-            Set-Service -Name AppReadiness -StartupType Manual -ErrorAction Stop
-            Write-Log "App Readiness Service enabled (set to Manual)"
-        } else {
-            Write-Log "App Readiness Service is properly configured ($($appReadiness.StartType)) - skipping"
+if ($configureAppReadiness -eq 1) {
+    Write-Log "Checking App Readiness Service..."
+    try {
+        $appReadiness = Get-Service -Name AppReadiness -ErrorAction SilentlyContinue
+        if ($appReadiness) {
+            if ($appReadiness.StartType -eq "Disabled") {
+                Write-Log "App Readiness Service is disabled - Enabling..."
+                Set-Service -Name AppReadiness -StartupType Manual -ErrorAction Stop
+                Write-Log "App Readiness Service enabled (set to Manual)"
+            } else {
+                Write-Log "App Readiness Service is properly configured ($($appReadiness.StartType)) - skipping"
+            }
         }
+    } catch {
+        Write-Log "Error configuring App Readiness Service: $($_.Exception.Message)"
     }
-} catch {
-    Write-Log "Error configuring App Readiness Service: $($_.Exception.Message)"
+} else {
+    Write-Log "App Readiness Service configuration disabled in configuration - skipping"
 }
 
 # Cleanup disk space only if free space is low (< 20 GB)
-Write-Log "Checking disk space..."
-try {
+if ($runDiskCleanup -eq 1) {
+    Write-Log "Checking disk space..."
+    try {
     $sysDrive = Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='C:'"
     $freeSpaceGBBefore = [math]::Round($sysDrive.FreeSpace / 1GB, 2)
     Write-Log "Free disk space: $freeSpaceGBBefore GB"
@@ -613,13 +774,17 @@ try {
     } else {
         Write-Log "Sufficient disk space available - skipping cleanup"
     }
-} catch {
-    Write-Log "Error during disk space check/cleanup: $($_.Exception.Message)"
+    } catch {
+        Write-Log "Error during disk space check/cleanup: $($_.Exception.Message)"
+    }
+} else {
+    Write-Log "Disk cleanup disabled in configuration - skipping"
 }
 
 # Remove Windows Update policy blocks only if they exist
-Write-Log "Checking for Windows Update policy blocks..."
-try {
+if ($removePolicyBlocks -eq 1) {
+    Write-Log "Checking for Windows Update policy blocks..."
+    try {
     $policyBlocks = @(
         @{Path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"; Name = "DoNotConnectToWindowsUpdateInternetLocations"},
         @{Path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"; Name = "DisableWindowsUpdateAccess"},
@@ -645,13 +810,17 @@ try {
     } else {
         Write-Log "Removed $blocksRemoved policy blocks"
     }
-} catch {
-    Write-Log "Error removing policy blocks: $($_.Exception.Message)"
+    } catch {
+        Write-Log "Error removing policy blocks: $($_.Exception.Message)"
+    }
+} else {
+    Write-Log "Windows Update policy blocks removal disabled in configuration - skipping"
 }
 
 # Reset Windows Update Agent only if COM interface is not accessible
-Write-Log "Checking Windows Update Agent health..."
-try {
+if ($resetWUAgent -eq 1) {
+    Write-Log "Checking Windows Update Agent health..."
+    try {
     $needsReset = $false
     $updateSession = New-Object -ComObject Microsoft.Update.Session -ErrorAction SilentlyContinue
     
@@ -680,8 +849,11 @@ try {
     } else {
         Write-Log "Windows Update Agent is healthy - skipping reset"
     }
-} catch {
-    Write-Log "Error checking/resetting Windows Update Agent: $($_.Exception.Message)"
+    } catch {
+        Write-Log "Error checking/resetting Windows Update Agent: $($_.Exception.Message)"
+    }
+} else {
+    Write-Log "Windows Update Agent reset disabled in configuration - skipping"
 }
 
 # Verify Windows Update client health
