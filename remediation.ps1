@@ -18,7 +18,6 @@
     - Windows Autopatch configuration check and repair
     - Registry policy cleanup (WSUS, GPO conflicts)
     - DLL re-registration (Windows Update DLLs)
-    - Setup registry block removal
     - Pending reboot flags cleanup
     - Critical services verification
     - Disk cleanup (when < 20 GB free space)
@@ -62,9 +61,6 @@
 
 .PARAMETER checkAutopatch
     Set to 1 to enable Windows Autopatch configuration check. Default: 1
-
-.PARAMETER removeSetupBlocks
-    Set to 1 to enable setup registry block removal. Default: 1
 
 .PARAMETER clearRebootFlags
     Set to 1 to enable pending reboot flags cleanup. Default: 1
@@ -126,9 +122,6 @@ $restartIntune = 1
 
 # Windows Autopatch configuration check and repair
 $checkAutopatch = 1
-
-# Setup registry block removal
-$removeSetupBlocks = 1
 
 # Pending reboot flags cleanup
 $clearRebootFlags = 1
@@ -622,25 +615,6 @@ if ($refreshWUPolicies -eq 1) {
     }
 } else {
     Write-Log "Windows Update policy refresh disabled in configuration - skipping"
-}
-
-# Check and remove setup registry block only if it exists
-if ($removeSetupBlocks -eq 1) {
-    Write-Log "Checking for setup registry blocks..."
-    try {
-        $setupBlock = Get-ItemProperty -Path "HKLM:\SYSTEM\Setup" -Name "SetupType" -ErrorAction SilentlyContinue
-        if ($setupBlock -and $setupBlock.SetupType -and $setupBlock.SetupType -ne 0) {
-            Write-Log "Setup registry block detected: SetupType = $($setupBlock.SetupType) - Removing..."
-            Remove-ItemProperty -Path "HKLM:\SYSTEM\Setup" -Name "SetupType" -Force -ErrorAction Stop
-            Write-Log "Successfully removed SetupType registry block"
-        } else {
-            Write-Log "No SetupType registry block found - skipping"
-        }
-    } catch {
-        Write-Log "Error checking/removing setup registry block: $($_.Exception.Message)"
-    }
-} else {
-    Write-Log "Setup registry block removal disabled in configuration - skipping"
 }
 
 # Clear pending reboot flags only if they exist
