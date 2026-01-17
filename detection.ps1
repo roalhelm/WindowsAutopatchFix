@@ -288,6 +288,17 @@ try {
         $issues += "Error checking Intune policy sync status: $($_.Exception.Message)"
     }
     
+    # Check for problematic PolicyManager registry entries
+    try {
+        $policyManagerPath = "HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Update"
+        if (Test-Path $policyManagerPath) {
+            $issues += "PolicyManager Update registry key exists (may interfere with Windows Update)"
+        }
+    }
+    catch {
+        # Registry check is informational
+    }
+    
     # Check for Windows Update for Business configuration
     try {
         $wufbPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"
