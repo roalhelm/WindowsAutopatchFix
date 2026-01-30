@@ -32,17 +32,19 @@
 .NOTES
     File Name     : remediation.ps1
     Author        : Ronny Alhelm
-    Version       : 3.0
+    Version       : 3.1
     Creation Date : 2024-09-19
-    Last Updated  : 2025-12-11
+    Last Updated  : 2026-01-30
 
 .CHANGES
+    3.1 - Optimized for Intune-only devices: Replaced gpupdate with dsregcmd /refreshprt for PRT refresh
+          Updated registry cleanup to focus on WSUS/GPO conflicts, improved Intune-only client support
     3.0 - Added intelligent detection (repairs only when needed) and configurable repair steps
     2.0 - Expanded to fix all common Windows Update errors, added comprehensive repair actions
     1.0 - Initial version (focused on 0Xc1900200)
 
 .VERSION
-    3.0
+    3.1
 
 .PARAMETER fullRepair
     Set to 1 to enable DISM + SFC system repair (resource intensive). Default: 0
