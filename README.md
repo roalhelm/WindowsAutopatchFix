@@ -65,16 +65,16 @@ $clearRebootFlags = 1        # Reboot flags
 $verifyCriticalServices = 1  # Services
 $configureAppReadiness = 1   # App Readiness
 $runDiskCleanup = 1          # Disk cleanup (<20GB)
-$removePolicyBlocks = 1      # Policy blocks
+$removePolicyBlocks = 1      # Policy blocks (WSUS)
 $resetWUAgent = 1            # WU Agent
-$updateGroupPolicy = 1       # Group Policy
+$refreshPRT = 1              # PRT refresh (Intune-only)
 $refreshWUPolicies = 1       # WU Policies
 ```
 
 **Quick Configs:**
 - **Minimal:** Only `$resetWUComponents`, `$verifyCriticalServices`, `$removePolicyBlocks` = 1
 - **Deep Repair:** `$fullRepair = 1` (DISM/SFC)
-- **Autopatch:** `$checkAutopatch`, `$removePolicyBlocks`, `$restartIntune`
+- **Intune-only/Autopatch:** `$checkAutopatch`, `$removePolicyBlocks`, `$refreshPRT`, `$restartIntune`
 
 ## 🔧 Manual Testing
 

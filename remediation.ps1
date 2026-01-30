@@ -23,7 +23,7 @@
     - Disk cleanup (when < 20 GB free space)
     - Windows Update policy blocks removal
     - Windows Update Agent reset
-    - Group Policy update
+    - Primary Refresh Token refresh (for Intune-only devices)
     - Windows Update policy refresh
     
     Addresses errors including: 0x80070002, 0x8007000E, 0x80240034, 0x8024402F, 0x80070643,
@@ -80,8 +80,8 @@
 .PARAMETER resetWUAgent
     Set to 1 to enable Windows Update Agent reset. Default: 1
 
-.PARAMETER updateGroupPolicy
-    Set to 1 to enable Group Policy update. Default: 1
+.PARAMETER refreshPRT
+    Set to 1 to enable Primary Refresh Token refresh (for Intune-only devices). Default: 1
 
 .PARAMETER refreshWUPolicies
     Set to 1 to enable Windows Update policy refresh. Default: 1
@@ -133,7 +133,7 @@ $verifyCriticalServices = 1
 $configureAppReadiness = 1
 
 # Disk cleanup (only runs if < 20 GB free space)
-$runDiskCleanup = 1
+$runDiskCleanup = 0
 
 # Windows Update policy blocks removal
 $removePolicyBlocks = 1
@@ -141,8 +141,8 @@ $removePolicyBlocks = 1
 # Windows Update Agent reset
 $resetWUAgent = 1
 
-# Group Policy update
-$updateGroupPolicy = 1
+# Primary Refresh Token refresh (for Intune-only devices)
+$refreshPRT = 1
 
 # Windows Update policy refresh
 $refreshWUPolicies = 1
@@ -286,15 +286,14 @@ if ($resetWUComponents -eq 1) {
     Write-Log "Windows Update component reset disabled in configuration - skipping"
 }
 
-# Check if registry keys exist before attempting deletion
+# Check if registry keys exist before attempting deletion (removes WSUS/GPO conflicts)
 if ($cleanupRegistry -eq 1) {
     $registryKeysDeleted = 0
+    # These keys are typically set by WSUS/GPO and can conflict with Intune-managed updates
     $registryKeys = @(
         "HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Update",
         "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection",
-        "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Appraiser\GWX",
-        "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\DisableWindowsUpdateAccess",
-        "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU\NoAutoUpdate"
+        "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Appraiser\GWX"
     )
 
     foreach ($key in $registryKeys) {
@@ -570,17 +569,17 @@ if ($checkAutopatch -eq 1) {
     Write-Log "Windows Autopatch check disabled in configuration - skipping"
 }
 
-# Force Group Policy update to apply any Intune-delivered policies
-if ($updateGroupPolicy -eq 1) {
-    Write-Log "Forcing Group Policy update..."
+# Refresh Primary Refresh Token for Intune-only devices (replaces gpupdate for cloud-only devices)
+if ($refreshPRT -eq 1) {
+    Write-Log "Refreshing Primary Refresh Token for Intune policy sync..."
     try {
-        $gpUpdateOutput = & gpupdate.exe /force 2>&1
-        Write-Log "Group Policy updated: $gpUpdateOutput"
+        $dsregOutput = & dsregcmd /refreshprt 2>&1
+        Write-Log "Primary Refresh Token refreshed: $dsregOutput"
     } catch {
-        Write-Log "Error running gpupdate: $($_.Exception.Message)"
+        Write-Log "Error running dsregcmd: $($_.Exception.Message)"
     }
 } else {
-    Write-Log "Group Policy update disabled in configuration - skipping"
+    Write-Log "Primary Refresh Token refresh disabled in configuration - skipping"
 }
 
 # Trigger Windows Update policy refresh
@@ -755,10 +754,11 @@ if ($runDiskCleanup -eq 1) {
     Write-Log "Disk cleanup disabled in configuration - skipping"
 }
 
-# Remove Windows Update policy blocks only if they exist
+# Remove WSUS policy blocks that prevent Intune-managed updates
 if ($removePolicyBlocks -eq 1) {
-    Write-Log "Checking for Windows Update policy blocks..."
+    Write-Log "Checking for WSUS policy blocks (conflicts with Intune)..."
     try {
+    # These policies force the device to use WSUS instead of Windows Update/Intune
     $policyBlocks = @(
         @{Path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"; Name = "DoNotConnectToWindowsUpdateInternetLocations"},
         @{Path = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"; Name = "DisableWindowsUpdateAccess"},

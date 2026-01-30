@@ -73,7 +73,8 @@ Intelligent automated repair with configurable steps. Each action is only execut
 - Windows Autopatch configuration refresh (only if enabled)
 - Windows Autopatch Client Broker installation trigger and verification
 - Client Broker process and service health checks
-- Group Policy and Windows Update policy refresh
+- Primary Refresh Token refresh for Intune policy sync (Intune-only devices)
+- Windows Update policy refresh
 - Disk cleanup (only if < 20 GB free space)
 - Windows Update Agent reset (only if COM interface broken)
 - Pending reboot flag cleanup (safe flags only)
@@ -92,9 +93,9 @@ $clearRebootFlags = 1        # Pending reboot flags cleanup
 $verifyCriticalServices = 1  # Critical services verification
 $configureAppReadiness = 1   # App Readiness Service configuration
 $runDiskCleanup = 1          # Disk cleanup (< 20 GB)
-$removePolicyBlocks = 1      # Windows Update policy blocks removal
+$removePolicyBlocks = 1      # WSUS policy blocks removal
 $resetWUAgent = 1            # Windows Update Agent reset
-$updateGroupPolicy = 1       # Group Policy update
+$refreshPRT = 1              # Primary Refresh Token refresh (Intune-only)
 $refreshWUPolicies = 1       # Windows Update policy refresh
 ```
 
@@ -145,7 +146,7 @@ $reregisterDLLs = 1          # DLL re-registration
 **Quick Configs:**
 - **Minimal:** Only `$resetWUComponents`, `$verifyCriticalServices`, `$removePolicyBlocks` = 1
 - **Deep Repair:** Set `$fullRepair = 1` (enables DISM/SFC - increases runtime)
-- **Autopatch:** Focus on `$checkAutopatch`, `$removePolicyBlocks`, `$restartIntune`
+- **Intune-only/Autopatch:** Focus on `$checkAutopatch`, `$removePolicyBlocks`, `$refreshPRT`, `$restartIntune`
 
 ## 📈 Monitoring
 
