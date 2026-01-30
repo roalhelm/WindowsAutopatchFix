@@ -98,18 +98,20 @@ Diese Checkliste hilft dabei, Windows Update und Autopatch-Probleme systematisch
 
 ---
 
-## 📝 REGISTRY & GROUP POLICY
+## 📝 REGISTRY & LEGACY POLICIES (WSUS/GPO Konflikte)
 
-### 9. WSUS/GPO Konfiguration
+### 9. WSUS/GPO Konflikte (Legacy Policies)
 | Prüfung | Wo zu prüfen | Sollwert | Problem bei |
-|---------|-------------|---------|-----------|
-| **WSUS Server konfiguriert** | `HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate` - Wert: `WUServer` | Sollte LEER sein (= direkt von Windows Update) | WSUS konfiguriert (z.B. http://wsus.company.local:8530) |
+|---------|-------------|---------|-------------|
+| **WSUS Server konfiguriert** | `HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate` - Wert: `WUServer` | Sollte LEER sein (Intune-only = direkt von Windows Update) | WSUS konfiguriert (z.B. http://wsus.company.local:8530) = **Blockiert Intune Updates** |
+| **UseWUServer Policy** | `HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU` - `UseWUServer` | Sollte nicht existieren | = 1 (zwingt WSUS-Nutzung) = **Intune komplett blockiert** |
 | **Auto Update Policy** | `HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU` - `NoAutoUpdate` | Sollte nicht existieren oder = 0 | = 1 (Auto Updates deaktiviert) |
 | **Installationshora** | `HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU` - `ScheduledInstallDay` | = 0 (every day) | = spezifisches Datum (kann Konflikte erzeugen) |
 
 **⚠️ Problemkombinationen:**
 - WSUS konfiguriert + ConfigMgr Remnants im Registry = **Double-Management-Konflikt**
-- GPO WSUS + lokale Intune Updates = **0x8024402F** (Mixed-Policy-Fehler)
+- GPO WSUS + Intune Updates = **0x8024402F** (Mixed-Policy-Fehler) - Intune komplett blockiert
+- `UseWUServer = 1` ohne erreichbaren WSUS-Server = **Totaler Update-Block**
 - `NoAutoUpdate = 1` + Intune Remediation = **Kann Remediation blockieren**
 
 ---
@@ -204,13 +206,14 @@ Diese Checkliste hilft dabei, Windows Update und Autopatch-Probleme systematisch
 ### Fehler: **0x8024402F**
 ```
 ❌ Prüfe:
-  1. WSUS konfiguriert? (SOLLTE sein leer)
-  2. Autopatch + WSUS gleichzeitig? (KONFLIKT!)
-  3. BITS Service läuft?
-  4. wuauserv Service läuft?
-  5. Event Log > 5 Fehler in 7 Tagen?
+  1. WSUS konfiguriert? (MUSS leer sein für Intune-only)
+  2. UseWUServer = 1 im Registry? (BLOCKIERT Intune komplett!)
+  3. Autopatch + WSUS gleichzeitig? (KONFLIKT!)
+  4. BITS Service läuft?
+  5. wuauserv Service läuft?
+  6. Event Log > 5 Fehler in 7 Tagen?
   
-✅ Lösung: WSUS entfernen ODER Autopatch deaktivieren
+✅ Lösung: WSUS-Policies entfernen (remediation.ps1) + PRT refresh
 ```
 
 ### Fehler: **0x80240034**
@@ -262,9 +265,9 @@ Diese Checkliste hilft dabei, Windows Update und Autopatch-Probleme systematisch
 ### Schnelle Fixes (Minimal Config)
 ```powershell
 # Nur diese auf 1 setzen in remediation.ps1:
-$resetWUComponents = 1      # Komponenten zurücksetzen
-$verifyCriticalServices = 1 # Services prüfen
-$removePolicyBlocks = 1     # Policy-Konflikte entfernen
+$resetWUComponents = 1       # WU Komponenten zurücksetzen
+$verifyCriticalServices = 1  # Services prüfen und starten
+$removePolicyBlocks = 1      # WSUS/GPO Policy-Konflikte entfernen
 ```
 
 ### Tiefe Reparatur (Deep Repair)
@@ -274,13 +277,14 @@ $fullRepair = 1             # DISM + SFC (dauert 10-30 Min!)
 # + alle anderen auf 1 setzen
 ```
 
-### Autopatch-Probleme
+### Autopatch-Probleme (Intune-only Clients)
 ```powershell
-# Für Autopatch-Konflikte:
-$checkAutopatch = 1
-$removePolicyBlocks = 1
-$restartIntune = 1
-$cleanupRegistry = 1
+# Für Autopatch/Intune-Konflikte:
+$checkAutopatch = 1       # Autopatch-Status prüfen
+$removePolicyBlocks = 1   # WSUS/GPO Policies entfernen
+$refreshPRT = 1           # Primary Refresh Token aktualisieren
+$restartIntune = 1        # Intune Management Extension neustarten
+$cleanupRegistry = 1      # Legacy-Registry-Keys bereinigen
 ```
 
 ---
