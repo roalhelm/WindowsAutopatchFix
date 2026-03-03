@@ -3,7 +3,7 @@
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Intune](https://img.shields.io/badge/Microsoft-Intune-0078D4.svg)](https://intune.microsoft.com)
-[![Version](https://img.shields.io/badge/Version-3.0-brightgreen.svg)](https://github.com/roalhelm/WindowsAutopatchFix)
+[![Version](https://img.shields.io/badge/Version-3.2-brightgreen.svg)](https://github.com/roalhelm/WindowsAutopatchFix)
 
 Intelligent detection and remediation for Windows Update failures. Configurable repair steps that only execute when needed, minimizing system impact.
 
@@ -106,7 +106,10 @@ Auto-detects & fixes: WSUS artifacts, GPO remnants, Autopatch Client Broker, co-
 
 ## 🔄 Version History
 
+**3.2 (2026-03-03)** - Enhanced reliability: Fixed race conditions with proper timing, comprehensive validation for all operations, status verification logging  
+**3.1 (2026-01-30)** - Intune-only optimization: dsregcmd PRT refresh, WSUS/GPO cleanup focus  
 **3.0 (2025-12-11)** - Intelligent detection, 15 configurable steps, conditional execution, optimized performance  
+**2.1 (2026-03-03)** - Detection script enhancements: Improved error handling, performance optimizations, better logging  
 **2.0 (2024-09-19)** - Comprehensive coverage, Autopatch support, WSUS cleanup  
 **1.0 (2024-09-19)** - Initial release
 

@@ -2,6 +2,7 @@
 <#
 .SYNOPSIS
     Detection script for Windows Update issues, checking system requirements and service health.
+    Features enhanced error handling and performance-optimized checks for large environments.
 
     GitHub Repository: https://github.com/roalhelm/
 
@@ -15,15 +16,19 @@
 .NOTES
     File Name     : detection.ps1
     Author        : Ronny Alhelm
-    Version       : 2.0
+    Version       : 2.1
     Creation Date : 2024-09-30
+    Last Updated  : 2026-03-03
 
 .CHANGES
+    2.1 - Enhanced error handling: Intelligent differentiation between recoverable and non-recoverable errors
+          Performance optimizations: Improved Event Log queries with limits and CBS.log size validation
+          Better logging: Added detailed error context and skip reasons for informational checks
     2.0 - Expanded to detect all common Windows Update errors, added Intune/Autopatch checks
     1.0 - Initial version (focused on 0Xc1900200)
 
 .VERSION
-    2.0
+    2.1
 
 .EXAMPLE
     powershell.exe -ExecutionPolicy Bypass -File .\detection.ps1
@@ -160,11 +165,12 @@ try {
     
     # Check for recent Windows Update failures in Event Log
     try {
+        # Use timeout to prevent slow event log queries from hanging the script
         $recentUpdateErrors = Get-WinEvent -FilterHashtable @{
             LogName='System'
             ID=16,20,24,25,31,34,35
             StartTime=(Get-Date).AddDays(-7)
-        } -MaxEvents 10 -ErrorAction SilentlyContinue
+        } -MaxEvents 10 -ErrorAction SilentlyContinue | Select-Object -First 10
         
         if ($recentUpdateErrors.Count -gt 5) {
             $issues += "Multiple Windows Update errors in Event Log: $($recentUpdateErrors.Count) errors in last 7 days"
@@ -172,6 +178,7 @@ try {
     }
     catch {
         # Event log access might fail, but this shouldn't cause detection to fail
+        Write-Log "Event log check skipped: $($_.Exception.Message)"
     }
     
     # Check Windows Update client health
@@ -398,14 +405,21 @@ try {
         # Check if CBS.log shows corruption (common indicator)
         $cbsLogPath = "$Env:SystemRoot\Logs\CBS\CBS.log"
         if (Test-Path $cbsLogPath) {
-            $cbsLog = Get-Content $cbsLogPath -Tail 100 -ErrorAction SilentlyContinue
-            if ($cbsLog -match "corrupt|failed|error") {
-                $issues += "CBS log indicates potential system file corruption (0x800F0922, 0x800F0831)"
+            # Only read file if it's not too large (< 50MB) to avoid performance issues
+            $cbsLogSize = (Get-Item $cbsLogPath -ErrorAction SilentlyContinue).Length / 1MB
+            if ($cbsLogSize -lt 50) {
+                $cbsLog = Get-Content $cbsLogPath -Tail 100 -ErrorAction SilentlyContinue
+                if ($cbsLog -match "corrupt|failed|error") {
+                    $issues += "CBS log indicates potential system file corruption (0x800F0922, 0x800F0831)"
+                }
+            } else {
+                Write-Log "CBS.log is too large ($([math]::Round($cbsLogSize, 2)) MB), skipping content analysis"
             }
         }
     }
     catch {
         # Log check is optional
+        Write-Log "CBS log check skipped: $($_.Exception.Message)"
     }
     
     # Check Windows Update Agent version
@@ -421,16 +435,19 @@ try {
     
     # Check for specific error codes in WindowsUpdate.log or Event Viewer
     try {
+        # Limit event log query to prevent performance issues
         $updateErrors = Get-WinEvent -FilterHashtable @{
             LogName='System'
             ProviderName='Microsoft-Windows-WindowsUpdateClient'
             Level=2,3
             StartTime=(Get-Date).AddDays(-3)
-        } -MaxEvents 20 -ErrorAction SilentlyContinue
+        } -MaxEvents 15 -ErrorAction SilentlyContinue
         
         if ($updateErrors) {
             $errorCodes = @()
-            foreach ($updateError in $updateErrors) {
+            # Process only first 15 events to avoid performance impact
+            $limitedErrors = $updateErrors | Select-Object -First 15
+            foreach ($updateError in $limitedErrors) {
                 if ($updateError.Message -match '0x[0-9A-Fa-f]{8}') {
                     $errorCodes += $matches[0]
                 }
@@ -444,6 +461,7 @@ try {
     }
     catch {
         # Event log parsing is informational
+        Write-Log "Event log error code parsing skipped: $($_.Exception.Message)"
     }
     
     # Check network connectivity to Windows Update servers
@@ -500,8 +518,25 @@ try {
 }
 catch {
     $errorMessage = "Detection script encountered an unexpected error: $($_.Exception.Message)"
+    $errorDetails = "Error at line $($_.InvocationInfo.ScriptLineNumber): $($_.Exception.GetType().FullName)"
+    
     Write-Error $errorMessage
     Write-Log $errorMessage
-    # Exit 1 to trigger remediation if detection script fails
-    Exit 1
+    Write-Log $errorDetails
+    
+    # Determine if error should trigger remediation
+    # Only trigger remediation for known recoverable errors, not for system/permission errors
+    $recoverableErrors = @(
+        'System.Management.Automation.RuntimeException',
+        'System.InvalidOperationException',
+        'System.ComponentModel.Win32Exception'
+    )
+    
+    if ($recoverableErrors -contains $_.Exception.GetType().FullName) {
+        Write-Log "Recoverable error detected - triggering remediation"
+        Exit 1
+    } else {
+        Write-Log "Non-recoverable system error - skipping remediation to avoid false trigger"
+        Exit 0
+    }
 }

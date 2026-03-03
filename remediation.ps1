@@ -3,6 +3,7 @@
 .SYNOPSIS
     Intelligent remediation script for Windows Update issues with configurable repair steps.
     Only executes repairs when problems are detected, minimizing unnecessary system changes.
+    Features robust validation, race condition prevention, and comprehensive operation verification.
 
     GitHub Repository: https://github.com/roalhelm/WindowsAutopatchFix
 
@@ -32,11 +33,14 @@
 .NOTES
     File Name     : remediation.ps1
     Author        : Ronny Alhelm
-    Version       : 3.1
+    Version       : 3.2
     Creation Date : 2024-09-19
-    Last Updated  : 2026-01-30
+    Last Updated  : 2026-03-03
 
 .CHANGES
+    3.2 - Enhanced reliability and validation: Fixed race conditions in service restarts with proper timing
+          Added comprehensive validation for all critical operations (DLL registration, service states)
+          Improved operation verification with detailed status logging and error detection
     3.1 - Optimized for Intune-only devices: Replaced gpupdate with dsregcmd /refreshprt for PRT refresh
           Updated registry cleanup to focus on WSUS/GPO conflicts, improved Intune-only client support
     3.0 - Added intelligent detection (repairs only when needed) and configurable repair steps
@@ -44,7 +48,7 @@
     1.0 - Initial version (focused on 0Xc1900200)
 
 .VERSION
-    3.1
+    3.2
 
 .PARAMETER fullRepair
     Set to 1 to enable DISM + SFC system repair (resource intensive). Default: 0
@@ -321,11 +325,22 @@ if ($cleanupRegistry -eq 1) {
 
 # Restart services only if they were stopped
 if ($servicesNeedingRestart.Count -gt 0) {
-    Start-Service -Name BITS -Verbose -ErrorAction SilentlyContinue
-    Start-Service -Name wuauserv -Verbose -ErrorAction SilentlyContinue
-    Start-Service -Name CryptSvc -Verbose -ErrorAction SilentlyContinue
-    Start-Service -Name msiserver -Verbose -ErrorAction SilentlyContinue
-    Write-Log "Windows Update services restarted"
+    $servicesToRestart = @('BITS', 'wuauserv', 'CryptSvc', 'msiserver')
+    foreach ($svcName in $servicesToRestart) {
+        try {
+            Start-Service -Name $svcName -ErrorAction Stop
+            Start-Sleep -Milliseconds 500
+            $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+            if ($svc -and $svc.Status -eq 'Running') {
+                Write-Log "Successfully restarted service: $svcName (Status: Running)"
+            } else {
+                Write-Log "Warning: Service $svcName may not have started correctly (Status: $($svc.Status))"
+            }
+        } catch {
+            Write-Log "Error restarting service $svcName: $($_.Exception.Message)"
+        }
+    }
+    Write-Log "Windows Update services restart sequence completed"
 }
 
 # Re-register Windows Update DLLs only if Windows Update COM interface is not accessible
@@ -356,14 +371,26 @@ $dlls = @(
     "wuweb.dll", "qmgr.dll", "qmgrprxy.dll", "wucltux.dll", "muweb.dll", "wuwebv.dll"
 )
 
+    $registeredCount = 0
+    $failedCount = 0
     foreach ($dll in $dlls) {
         try {
-            $regResult = & regsvr32.exe /s $dll 2>&1
+            $dllPath = "$env:SystemRoot\System32\$dll"
+            if (Test-Path $dllPath) {
+                $process = Start-Process -FilePath "regsvr32.exe" -ArgumentList "/s", $dll -Wait -PassThru -NoNewWindow -ErrorAction Stop
+                if ($process.ExitCode -eq 0) {
+                    $registeredCount++
+                } else {
+                    Write-Log "Warning: Failed to register $dll (Exit code: $($process.ExitCode))"
+                    $failedCount++
+                }
+            }
         } catch {
-            # Some DLLs may not exist on all systems, continue
+            Write-Log "Error registering $dll: $($_.Exception.Message)"
+            $failedCount++
         }
     }
-    Write-Log "DLL re-registration completed"
+    Write-Log "DLL re-registration completed: $registeredCount succeeded, $failedCount failed/skipped"
     }
 } else {
     Write-Log "DLL re-registration disabled in configuration - skipping"
@@ -377,7 +404,15 @@ if ($restartIntune -eq 1) {
         if ($intuneService -and $intuneService.Status -ne "Running") {
             Write-Log "Intune Management Extension service is not running - restarting..."
             Restart-Service -Name IntuneManagementExtension -Force -ErrorAction Stop
-            Write-Log "Intune Management Extension service restarted successfully"
+            Start-Sleep -Seconds 2
+            
+            # Verify service is running after restart
+            $intuneService = Get-Service -Name IntuneManagementExtension -ErrorAction SilentlyContinue
+            if ($intuneService -and $intuneService.Status -eq "Running") {
+                Write-Log "Intune Management Extension service restarted successfully (Status: Running)"
+            } else {
+                Write-Log "Warning: Intune Management Extension service may not have started correctly (Status: $($intuneService.Status))"
+            }
         } else {
             Write-Log "Intune Management Extension service is already running - skipping restart"
         }
@@ -546,7 +581,15 @@ if ($checkAutopatch -eq 1) {
                     $service = Get-Service -Name $svc -ErrorAction SilentlyContinue
                     if ($service -and $service.Status -eq "Running") {
                         Restart-Service -Name $svc -Force -ErrorAction Stop
-                        Write-Log "Restarted $svc for Autopatch refresh"
+                        Start-Sleep -Seconds 1
+                        
+                        # Verify service restarted successfully
+                        $service = Get-Service -Name $svc -ErrorAction SilentlyContinue
+                        if ($service -and $service.Status -eq "Running") {
+                            Write-Log "Successfully restarted $svc for Autopatch refresh (Status: Running)"
+                        } else {
+                            Write-Log "Warning: $svc may not have restarted correctly (Status: $($service.Status))"
+                        }
                     }
                 } catch {
                     Write-Log "Could not restart $svc`: $($_.Exception.Message)"
@@ -658,8 +701,16 @@ foreach ($svcName in $criticalServices.Keys) {
             if ($service.Status -ne "Running") {
                 Write-Log "Service $($criticalServices[$svcName]) is not running - Starting..."
                 Start-Service -Name $svcName -ErrorAction Stop
-                Write-Log "Successfully started $($criticalServices[$svcName])"
-                $servicesFixed++
+                Start-Sleep -Milliseconds 500
+                
+                # Verify service started successfully
+                $service = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+                if ($service -and $service.Status -eq "Running") {
+                    Write-Log "Successfully started $($criticalServices[$svcName]) (Status: Running)"
+                    $servicesFixed++
+                } else {
+                    Write-Log "Warning: Failed to start $($criticalServices[$svcName]) (Status: $($service.Status))"
+                }
             }
             
             # Ensure service is set to automatic start (except TrustedInstaller which is Manual)
@@ -667,8 +718,15 @@ foreach ($svcName in $criticalServices.Keys) {
                 $startupType = (Get-Service -Name $svcName).StartType
                 if ($startupType -ne 'Automatic') {
                     Set-Service -Name $svcName -StartupType Automatic -ErrorAction SilentlyContinue
-                    Write-Log "Set $($criticalServices[$svcName]) to Automatic startup"
-                    $servicesFixed++
+                    
+                    # Verify startup type was changed
+                    $verifyStartupType = (Get-Service -Name $svcName -ErrorAction SilentlyContinue).StartType
+                    if ($verifyStartupType -eq 'Automatic') {
+                        Write-Log "Set $($criticalServices[$svcName]) to Automatic startup - Verified"
+                        $servicesFixed++
+                    } else {
+                        Write-Log "Warning: Could not verify startup type for $($criticalServices[$svcName])"
+                    }
                 }
             }
         } else {
@@ -695,7 +753,14 @@ if ($configureAppReadiness -eq 1) {
             if ($appReadiness.StartType -eq "Disabled") {
                 Write-Log "App Readiness Service is disabled - Enabling..."
                 Set-Service -Name AppReadiness -StartupType Manual -ErrorAction Stop
-                Write-Log "App Readiness Service enabled (set to Manual)"
+                
+                # Verify the startup type was changed
+                $appReadiness = Get-Service -Name AppReadiness -ErrorAction SilentlyContinue
+                if ($appReadiness -and $appReadiness.StartType -eq "Manual") {
+                    Write-Log "App Readiness Service enabled (set to Manual) - Verified"
+                } else {
+                    Write-Log "Warning: App Readiness Service startup type may not have been changed correctly"
+                }
             } else {
                 Write-Log "App Readiness Service is properly configured ($($appReadiness.StartType)) - skipping"
             }
@@ -815,13 +880,30 @@ if ($resetWUAgent -eq 1) {
         Write-Log "Windows Update Agent needs reset - resetting..."
         # Stop Windows Update service
         Stop-Service -Name wuauserv -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
         
         # Remove Windows Update registry keys to force re-initialization
-        Remove-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate" -Recurse -Force -ErrorAction SilentlyContinue
+        $regRemoved = $false
+        if (Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate") {
+            Remove-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate" -Recurse -Force -ErrorAction SilentlyContinue
+            $regRemoved = $true
+        }
         
         # Restart Windows Update service (will recreate registry keys)
-        Start-Service -Name wuauserv -ErrorAction SilentlyContinue
-        Write-Log "Windows Update Agent reset completed"
+        Start-Service -Name wuauserv -ErrorAction Stop
+        Start-Sleep -Seconds 2
+        
+        # Verify service is running and registry was recreated
+        $wuService = Get-Service -Name wuauserv -ErrorAction SilentlyContinue
+        $regRecreated = Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate"
+        
+        if ($wuService -and $wuService.Status -eq "Running" -and $regRecreated) {
+            Write-Log "Windows Update Agent reset completed successfully (Service: Running, Registry: Recreated)"
+        } elseif ($regRemoved -and -not $regRecreated) {
+            Write-Log "Warning: Registry keys were removed but may not have been recreated yet"
+        } else {
+            Write-Log "Windows Update Agent reset completed with potential issues"
+        }
     } else {
         Write-Log "Windows Update Agent is healthy - skipping reset"
     }
