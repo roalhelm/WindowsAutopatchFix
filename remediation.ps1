@@ -337,7 +337,7 @@ if ($servicesNeedingRestart.Count -gt 0) {
                 Write-Log "Warning: Service $svcName may not have started correctly (Status: $($svc.Status))"
             }
         } catch {
-            Write-Log "Error restarting service $svcName: $($_.Exception.Message)"
+            Write-Log "Error restarting service ${svcName}: $($_.Exception.Message)"
         }
     }
     Write-Log "Windows Update services restart sequence completed"
@@ -386,7 +386,7 @@ $dlls = @(
                 }
             }
         } catch {
-            Write-Log "Error registering $dll: $($_.Exception.Message)"
+            Write-Log "Error registering ${dll}: $($_.Exception.Message)"
             $failedCount++
         }
     }
