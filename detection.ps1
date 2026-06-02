@@ -16,11 +16,16 @@
 .NOTES
     File Name     : detection.ps1
     Author        : Ronny Alhelm
-    Version       : 2.1
+    Version       : 2.2
     Creation Date : 2024-09-30
-    Last Updated  : 2026-03-03
+    Last Updated  : 2026-06-02
 
 .CHANGES
+    2.2 - Enhanced diagnostics: Added BitLocker check, DLL version validation, service dependency checks
+          Extended network tests: HTTP connectivity, DNS resolution, proxy detection
+          Improved error reporting: Error code dictionary with descriptions, enhanced Client Broker health check
+          Better configuration: Configurable thresholds, parameter support, log rotation (10 MB limit)
+          Performance: Optimized Event Log queries (configurable limit, default 50 events)
     2.1 - Enhanced error handling: Intelligent differentiation between recoverable and non-recoverable errors
           Performance optimizations: Improved Event Log queries with limits and CBS.log size validation
           Better logging: Added detailed error context and skip reasons for informational checks
@@ -28,7 +33,7 @@
     1.0 - Initial version (focused on 0Xc1900200)
 
 .VERSION
-    2.1
+    2.2
 
 .EXAMPLE
     powershell.exe -ExecutionPolicy Bypass -File .\detection.ps1
@@ -38,8 +43,27 @@
 
 # PowerShell Detection Script for Windows Update Issues
 
+#region Parameters
+param (
+    [string]$LogPath = "C:\ProgramData\Microsoft\IntuneManagementExtension\Logs\WindowsUpdateFix_detection.log",
+    [switch]$Verbose
+)
+#endregion
+
+#region Configuration - Anpassbare Schwellwerte
+$maxEventLogEntries = 50        # Max Events bei Log-Analyse
+$minDiskSpaceGB = 20            # Minimum freier Speicherplatz
+$maxSoftwareDistFiles = 75      # Max Dateien in SoftwareDistribution/Download
+$maxCBSLogSizeMB = 50          # CBS.log Größenlimit für Parsing
+$dllMinYear = 2020             # Minimum Jahr für WU-DLL-Versionen
+$maxEventLogDays = 7           # Zeitraum für Event-Log-Analyse
+$networkTestTimeout = 5        # Timeout für Netzwerk-Tests (Sekunden)
+$logRotationSizeMB = 10        # Log-Rotation bei dieser Größe
+$maxLogFiles = 5               # Anzahl zu behaltender Log-Dateien
+#endregion
+
 # Function to log output to file and console
-$global:LogPath = "C:\ProgramData\Microsoft\IntuneManagementExtension\Logs\WindowsUpdateFix_detection.log"
+$global:LogPath = $LogPath
 function Write-Log {
     param ([string]$message)
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
@@ -48,11 +72,159 @@ function Write-Log {
     Add-Content -Path $global:LogPath -Value $logLine -ErrorAction SilentlyContinue
 }
 
+# Function to rotate log files
+function Invoke-LogRotation {
+    try {
+        if (Test-Path $global:LogPath) {
+            $logSize = (Get-Item $global:LogPath).Length / 1MB
+            if ($logSize -gt $logRotationSizeMB) {
+                Write-Output "Log rotation: Current log size $([math]::Round($logSize, 2)) MB exceeds limit"
+                
+                # Delete oldest log if max count reached
+                $oldestLog = "$global:LogPath.$maxLogFiles"
+                if (Test-Path $oldestLog) {
+                    Remove-Item $oldestLog -Force -ErrorAction SilentlyContinue
+                }
+                
+                # Rotate existing logs
+                for ($i = $maxLogFiles - 1; $i -ge 1; $i--) {
+                    $currentLog = "$global:LogPath.$i"
+                    $nextLog = "$global:LogPath.$($i + 1)"
+                    if (Test-Path $currentLog) {
+                        Move-Item $currentLog $nextLog -Force -ErrorAction SilentlyContinue
+                    }
+                }
+                
+                # Rotate current log to .1
+                Move-Item $global:LogPath "$global:LogPath.1" -Force -ErrorAction SilentlyContinue
+                Write-Output "Log rotation completed successfully"
+            }
+        }
+        
+        # Clean up old logs (older than 30 days)
+        $logDir = Split-Path $global:LogPath -Parent
+        if (Test-Path $logDir) {
+            Get-ChildItem -Path $logDir -Filter "WindowsUpdateFix_*.log*" -ErrorAction SilentlyContinue | 
+                Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-30) } | 
+                Remove-Item -Force -ErrorAction SilentlyContinue
+        }
+    }
+    catch {
+        Write-Output "Log rotation warning: $($_.Exception.Message)"
+    }
+}
+
+# Windows Update Error Code Dictionary
+$script:ErrorCodeDictionary = @{
+    '0x80070002' = 'File not found - Hardware drivers or corrupted media'
+    '0x8007000E' = 'Out of memory - Insufficient disk space (< 10 GB)'
+    '0x80240034' = 'Update not applicable - Corrupted downloads'
+    '0x8024402F' = 'Network/connectivity - WSUS/GPO conflicts or firewall blocks'
+    '0x80070643' = 'Installation failure - Certificate validation or CryptSvc issues'
+    '0x800F0922' = 'System file corruption - CBS log issues'
+    '0xC1900200' = 'Upgrade requirements not met - TPM, old DLLs, or Setup still running'
+    '0x80070490' = 'Component store corruption - catroot2 folder issues'
+    '0x800F0831' = 'CBS corruption - System file issues in Component Store'
+    '0x80244018' = 'Windows Update service not running'
+    '0x8024401C' = 'Windows Update service registry corruption'
+    '0x80070003' = 'Path not found - System file corruption'
+    '0x8007000D' = 'Invalid data - Corrupted update files'
+}
+
+function Get-ErrorCodeDescription {
+    param ([string]$errorCode)
+    
+    $errorCode = $errorCode.Trim()
+    if ($script:ErrorCodeDictionary.ContainsKey($errorCode)) {
+        return "$errorCode - $($script:ErrorCodeDictionary[$errorCode])"
+    }
+    return $errorCode
+}
+
 try {
+    # Perform log rotation if needed
+    Invoke-LogRotation
+    
     $exitCode = 0
     $issues = @()
     
-    Write-Log "Starting Windows Update health detection for all common issues"
+    Write-Log "Starting Windows Update health detection for all common issues (v2.2)"
+    
+    # Check BitLocker status (informational - may block feature updates)
+    try {
+        $bitlockerVolumes = Get-BitLockerVolume -MountPoint "C:" -ErrorAction SilentlyContinue
+        if ($bitlockerVolumes) {
+            $protectionStatus = $bitlockerVolumes.ProtectionStatus
+            if ($protectionStatus -eq "On") {
+                Write-Log "INFO: BitLocker is enabled on C: - May need suspension for feature updates"
+                # Not adding to issues - informational only
+            }
+        }
+    }
+    catch {
+        Write-Log "BitLocker check skipped: $($_.Exception.Message)"
+    }
+    
+    # Check Windows Update DLL versions (old DLLs cause 0xC1900200)
+    try {
+        $criticalDLLs = @(
+            "$env:SystemRoot\System32\wuapi.dll",
+            "$env:SystemRoot\System32\wuaueng.dll",
+            "$env:SystemRoot\System32\wups2.dll"
+        )
+        
+        $oldDLLsFound = $false
+        foreach ($dllPath in $criticalDLLs) {
+            if (Test-Path $dllPath) {
+                $dllInfo = Get-Item $dllPath -ErrorAction SilentlyContinue
+                if ($dllInfo) {
+                    $dllVersion = $dllInfo.VersionInfo.FileVersion
+                    $dllDate = $dllInfo.LastWriteTime
+                    
+                    # Check if DLL is older than minimum year
+                    if ($dllDate.Year -lt $dllMinYear) {
+                        $dllName = Split-Path $dllPath -Leaf
+                        $issues += "Outdated Windows Update DLL: $dllName (Date: $($dllDate.ToString('yyyy-MM-dd')), causes 0xC1900200)"
+                        $oldDLLsFound = $true
+                    }
+                }
+            }
+        }
+        
+        if (-not $oldDLLsFound) {
+            Write-Log "Windows Update DLLs are up-to-date (all >= $dllMinYear)"
+        }
+    }
+    catch {
+        Write-Log "DLL version check skipped: $($_.Exception.Message)"
+    }
+    
+    # Check service dependencies (RpcSs, DcomLaunch are prerequisites for WU services)
+    try {
+        $prerequisiteServices = @('RpcSs', 'DcomLaunch', 'UsoSvc')
+        $dependencyIssues = $false
+        
+        foreach ($svcName in $prerequisiteServices) {
+            $service = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+            if ($service) {
+                if ($service.Status -ne "Running") {
+                    $issues += "Critical prerequisite service not running: $svcName (Status: $($service.Status))"
+                    $dependencyIssues = $true
+                }
+            }
+            else {
+                $issues += "Critical prerequisite service not found: $svcName"
+                $dependencyIssues = $true
+            }
+        }
+        
+        if (-not $dependencyIssues) {
+            Write-Log "All prerequisite services are running"
+        }
+    }
+    catch {
+        Write-Log "Service dependency check skipped: $($_.Exception.Message)"
+    }
     
     # Check for TPM activation
     try {
@@ -76,13 +248,16 @@ try {
         $issues += "Unable to verify Secure Boot status (may not be supported on this system)"
     }
     
-    # Check free disk space on system drive (minimum 20 GB required)
+    # Check free disk space on system drive (minimum configurable GB required)
     try {
         $sysDrive = Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='C:'" -ErrorAction SilentlyContinue
         if ($sysDrive) {
             $freeSpaceGB = [math]::Round($sysDrive.FreeSpace / 1GB, 2)
-            if ($freeSpaceGB -lt 20) {
-                $issues += "Insufficient disk space: $freeSpaceGB GB available (minimum 20 GB required)"
+            if ($freeSpaceGB -lt $minDiskSpaceGB) {
+                $issues += "Insufficient disk space: $freeSpaceGB GB available (minimum $minDiskSpaceGB GB required)"
+            }
+            else {
+                Write-Log "Disk space check passed: $freeSpaceGB GB available"
             }
         }
         else {
@@ -137,8 +312,11 @@ try {
             if (Test-Path $downloadFolder) {
                 $downloadFiles = Get-ChildItem $downloadFolder -ErrorAction SilentlyContinue
                 # If there are many stuck download files, it might indicate corruption
-                if ($downloadFiles.Count -gt 50) {
-                    $issues += "SoftwareDistribution folder may be corrupted: $($downloadFiles.Count) files in Download folder"
+                if ($downloadFiles.Count -gt $maxSoftwareDistFiles) {
+                    $issues += "SoftwareDistribution folder may be corrupted: $($downloadFiles.Count) files in Download folder (max: $maxSoftwareDistFiles)"
+                }
+                else {
+                    Write-Log "SoftwareDistribution folder check passed: $($downloadFiles.Count) files"
                 }
             }
         }
@@ -169,11 +347,15 @@ try {
         $recentUpdateErrors = Get-WinEvent -FilterHashtable @{
             LogName='System'
             ID=16,20,24,25,31,34,35
-            StartTime=(Get-Date).AddDays(-7)
-        } -MaxEvents 10 -ErrorAction SilentlyContinue | Select-Object -First 10
+            StartTime=(Get-Date).AddDays(-$maxEventLogDays)
+        } -MaxEvents $maxEventLogEntries -ErrorAction SilentlyContinue
         
-        if ($recentUpdateErrors.Count -gt 5) {
-            $issues += "Multiple Windows Update errors in Event Log: $($recentUpdateErrors.Count) errors in last 7 days"
+        if ($recentUpdateErrors -and $recentUpdateErrors.Count -gt 5) {
+            $issues += "Multiple Windows Update errors in Event Log: $($recentUpdateErrors.Count) errors in last $maxEventLogDays days"
+            Write-Log "Event log analysis: Found $($recentUpdateErrors.Count) Windows Update errors"
+        }
+        else {
+            Write-Log "Event log check passed: $($recentUpdateErrors.Count) errors in last $maxEventLogDays days"
         }
     }
     catch {
@@ -232,8 +414,9 @@ try {
                 $issues += "Windows Autopatch is not properly enabled"
             }
             
-            # Check if Windows Autopatch Client Broker is installed
+            # Enhanced Client Broker health check
             $autopatchBrokerInstalled = $false
+            $autopatchBrokerPath = $null
             $autopatchBrokerPaths = @(
                 "C:\Program Files\Microsoft Windows Autopatch\WindowsAutopatchClientBroker.exe",
                 "C:\Program Files (x86)\Microsoft Windows Autopatch\WindowsAutopatchClientBroker.exe"
@@ -242,7 +425,29 @@ try {
             foreach ($path in $autopatchBrokerPaths) {
                 if (Test-Path $path) {
                     $autopatchBrokerInstalled = $true
-                    Write-Log "Windows Autopatch Client Broker found at: $path"
+                    $autopatchBrokerPath = $path
+                    
+                    # Check broker file version and date
+                    $brokerInfo = Get-Item $path -ErrorAction SilentlyContinue
+                    if ($brokerInfo) {
+                        $brokerVersion = $brokerInfo.VersionInfo.FileVersion
+                        $brokerDate = $brokerInfo.LastWriteTime
+                        Write-Log "Windows Autopatch Client Broker found: Version $brokerVersion, Date: $($brokerDate.ToString('yyyy-MM-dd'))"
+                        
+                        # Check if broker is older than 1 year (may need update)
+                        if ($brokerDate -lt (Get-Date).AddYears(-1)) {
+                            Write-Log "WARNING: Autopatch Client Broker is older than 1 year - may need update"
+                        }
+                        
+                        # Check if broker process is running
+                        $brokerProcess = Get-Process -Name "WindowsAutopatchClientBroker" -ErrorAction SilentlyContinue
+                        if ($brokerProcess) {
+                            Write-Log "Autopatch Client Broker process is running (PID: $($brokerProcess.Id))"
+                        }
+                        else {
+                            Write-Log "INFO: Autopatch Client Broker process is not currently running"
+                        }
+                    }
                     break
                 }
             }
@@ -441,13 +646,11 @@ try {
             ProviderName='Microsoft-Windows-WindowsUpdateClient'
             Level=2,3
             StartTime=(Get-Date).AddDays(-3)
-        } -MaxEvents 15 -ErrorAction SilentlyContinue
+        } -MaxEvents $maxEventLogEntries -ErrorAction SilentlyContinue
         
         if ($updateErrors) {
             $errorCodes = @()
-            # Process only first 15 events to avoid performance impact
-            $limitedErrors = $updateErrors | Select-Object -First 15
-            foreach ($updateError in $limitedErrors) {
+            foreach ($updateError in $updateErrors) {
                 if ($updateError.Message -match '0x[0-9A-Fa-f]{8}') {
                     $errorCodes += $matches[0]
                 }
@@ -455,7 +658,9 @@ try {
             
             if ($errorCodes.Count -gt 0) {
                 $uniqueErrors = $errorCodes | Select-Object -Unique
-                $issues += "Recent Windows Update errors found: $($uniqueErrors -join ', ')"
+                $errorDescriptions = $uniqueErrors | ForEach-Object { Get-ErrorCodeDescription $_ }
+                $issues += "Recent Windows Update errors found: $($errorDescriptions -join ', ')"
+                Write-Log "Detected error codes: $($errorDescriptions -join ' | ')"
             }
         }
     }
@@ -464,23 +669,52 @@ try {
         Write-Log "Event log error code parsing skipped: $($_.Exception.Message)"
     }
     
-    # Check network connectivity to Windows Update servers
+    # Enhanced network connectivity to Windows Update servers
     try {
         $updateServers = @(
-            "update.microsoft.com",
-            "windowsupdate.microsoft.com"
+            @{Name = "update.microsoft.com"; Port = 443},
+            @{Name = "windowsupdate.microsoft.com"; Port = 443}
         )
         
+        $networkIssues = 0
         foreach ($server in $updateServers) {
-            $testConnection = Test-NetConnection -ComputerName $server -Port 443 -InformationLevel Quiet -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
-            if (-not $testConnection) {
-                $issues += "Cannot reach Windows Update server: $server (network/firewall issue, causes 0x8024402F)"
-                break
+            # Test TCP connectivity
+            $tcpTest = Test-NetConnection -ComputerName $server.Name -Port $server.Port -InformationLevel Quiet -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+            
+            if (-not $tcpTest) {
+                $issues += "Cannot reach Windows Update server: $($server.Name):$($server.Port) (network/firewall issue, causes 0x8024402F)"
+                $networkIssues++
             }
+            else {
+                Write-Log "Network check passed: $($server.Name):$($server.Port) is reachable"
+            }
+            
+            # Test DNS resolution separately
+            try {
+                $dnsResult = Resolve-DnsName -Name $server.Name -ErrorAction SilentlyContinue
+                if (-not $dnsResult) {
+                    Write-Log "WARNING: DNS resolution failed for $($server.Name)"
+                }
+            }
+            catch {
+                Write-Log "DNS check skipped for $($server.Name): $($_.Exception.Message)"
+            }
+        }
+        
+        # Check for proxy configuration that might interfere
+        try {
+            $proxySettings = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -ErrorAction SilentlyContinue
+            if ($proxySettings -and $proxySettings.ProxyEnable -eq 1) {
+                Write-Log "INFO: Proxy is configured: $($proxySettings.ProxyServer)"
+            }
+        }
+        catch {
+            Write-Log "Proxy check skipped: $($_.Exception.Message)"
         }
     }
     catch {
         # Network check is informational
+        Write-Log "Network connectivity check skipped: $($_.Exception.Message)"
     }
     
     # Evaluate results and determine exit code

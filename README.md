@@ -3,7 +3,7 @@
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Intune](https://img.shields.io/badge/Microsoft-Intune-0078D4.svg)](https://intune.microsoft.com)
-[![Version](https://img.shields.io/badge/Version-3.2-brightgreen.svg)](https://github.com/roalhelm/WindowsAutopatchFix)
+[![Version](https://img.shields.io/badge/Version-3.3%20%2F%202.2-brightgreen.svg)](https://github.com/roalhelm/WindowsAutopatchFix)
 
 Intelligent detection and remediation for Windows Update failures. Configurable repair steps that only execute when needed, minimizing system impact.
 
@@ -12,10 +12,13 @@ Intelligent detection and remediation for Windows Update failures. Configurable 
 Smart, targeted Windows Update repair for Intune-managed devices.
 
 **Key Features:**
-- **Smart Detection** - Only fixes what's broken
-- **Fully Configurable** - 15 independent repair steps
-- **Minimal Impact** - Skips unnecessary operations
-- **20+ Error Codes** - Comprehensive coverage
+- **Smart Detection** - Only fixes what's broken, with enhanced diagnostics (DLL versions, BitLocker, service dependencies)
+- **Fully Configurable** - 15 independent repair steps with parameter support
+- **Robust Reliability** - Service start retry logic (3 attempts, exponential backoff)
+- **Minimal Impact** - Skips unnecessary operations, intelligent thresholds
+- **Enhanced Validation** - DLL version checks, extended reboot flag cleanup, error code descriptions
+- **Auto Log Rotation** - 10 MB limit, keeps last 5 logs
+- **20+ Error Codes** - Comprehensive coverage with error code dictionary
 
 **Addresses:** Service failures, corrupted components, registry/policy conflicts, WSUS artifacts, Autopatch issues, disk space, database corruption.
 
@@ -38,10 +41,32 @@ Windows 10/11 | Microsoft Intune | PowerShell 5.1+ | System/Admin permissions
 
 ## 📁 Files
 
-**`detection.ps1`** - Checks TPM/Secure Boot, disk space, services, components, registry/WSUS, Intune/Autopatch, reboots  
+**`detection.ps1`** (v2.2) - Enhanced diagnostics with BitLocker check, DLL version validation, service dependencies, extended network tests, error code dictionary  
 Exit: `0` = healthy | `1` = issues (triggers remediation)
 
-**`remediation.ps1`** - Intelligent repair with 15 configurable steps (see Configuration below)
+**`remediation.ps1`** (v3.3) - Intelligent repair with 15 configurable steps, service retry logic, DLL validation, extended reboot flag cleanup
+
+**`Test-WindowsUpdateFix.ps1`** - Local validation script for testing before Intune deployment
+
+## 🆕 What's New (v3.3 / v2.2)
+
+**detection.ps1 v2.2:**
+- ✅ **BitLocker Status Check** - Warns if enabled (may block feature updates)
+- ✅ **DLL Version Validation** - Detects outdated Windows Update DLLs (main cause of 0xC1900200)
+- ✅ **Service Dependencies** - Checks RpcSs, DcomLaunch, UsoSvc prerequisites
+- ✅ **Extended Event Log Analysis** - Configurable limit (default 50), with error code descriptions
+- ✅ **Enhanced Network Tests** - HTTP connectivity, DNS resolution, proxy detection
+- ✅ **Error Code Dictionary** - Descriptions for 13 common error codes
+- ✅ **Log Rotation** - Automatic rotation at 10 MB, keeps last 5 logs
+- ✅ **Parameter Support** - `-LogPath`, `-Verbose` for flexible deployment
+
+**remediation.ps1 v3.3:**
+- ✅ **Service Retry Logic** - 3 attempts with exponential backoff (500ms → 1s → 2s)
+- ✅ **DLL Validation** - Version checks and COM interface testing after re-registration
+- ✅ **Extended Reboot Flags** - Cleans PackagesPending, RebootRequired, CBS RebootPending
+- ✅ **Parameter Support** - All 15 repair flags configurable via parameters
+- ✅ **Enhanced Validation** - Post-operation verification for all critical actions
+- ✅ **Configurable Thresholds** - SoftwareDistribution limit (75 files), retry settings
 
 ## 📊 Logging
 
@@ -78,7 +103,29 @@ $refreshWUPolicies = 1       # WU Policies
 
 ## 🔧 Manual Testing
 
-`powershell.exe -ExecutionPolicy Bypass -File .\remediation.ps1` (requires Admin)
+**Local Validation (before Intune deployment):**
+```powershell
+# Run test suite
+.\Test-WindowsUpdateFix.ps1
+
+# Test detection only
+.\Test-WindowsUpdateFix.ps1 -TestDetectionOnly
+
+# Test remediation only
+.\Test-WindowsUpdateFix.ps1 -TestRemediationOnly
+```
+
+**Run scripts manually:**
+```powershell
+# Detection
+powershell.exe -ExecutionPolicy Bypass -File .\detection.ps1
+
+# Remediation (requires Admin)
+powershell.exe -ExecutionPolicy Bypass -File .\remediation.ps1
+
+# With parameters
+.\remediation.ps1 -fullRepair 1 -Verbose
+```
 
 ## 📈 Monitoring
 

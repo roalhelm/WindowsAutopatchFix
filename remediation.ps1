@@ -33,11 +33,16 @@
 .NOTES
     File Name     : remediation.ps1
     Author        : Ronny Alhelm
-    Version       : 3.2
+    Version       : 3.3
     Creation Date : 2024-09-19
-    Last Updated  : 2026-03-03
+    Last Updated  : 2026-06-02
 
 .CHANGES
+    3.3 - Enhanced reliability: Service start with retry logic (3 attempts, exponential backoff)
+          Extended validation: DLL version checks after registration, enhanced reboot flag cleanup
+          Better configuration: All repair flags as parameters, configurable thresholds
+          Improved logging: Log rotation (10 MB limit), detailed validation results
+          Extended cleanup: Additional reboot flag locations (PackagesPending, RebootRequired)
     3.2 - Enhanced reliability and validation: Fixed race conditions in service restarts with proper timing
           Added comprehensive validation for all critical operations (DLL registration, service states)
           Improved operation verification with detailed status logging and error detection
@@ -48,7 +53,7 @@
     1.0 - Initial version (focused on 0Xc1900200)
 
 .VERSION
-    3.2
+    3.3
 
 .PARAMETER fullRepair
     Set to 1 to enable DISM + SFC system repair (resource intensive). Default: 0
@@ -108,55 +113,59 @@
 
 # PowerShell Remediation Script for All Windows Update Issues
 
-#region Configuration - Enable/Disable Repair Steps
-# Set to 1 to enable, 0 to skip individual repair steps
+#region Parameters
+param (
+    [string]$LogPath = "C:\ProgramData\Microsoft\IntuneManagementExtension\Logs\WindowsUpdateFix_remediation.log",
+    [int]$fullRepair = 0,
+    [int]$resetWUComponents = 1,
+    [int]$cleanupRegistry = 1,
+    [int]$reregisterDLLs = 1,
+    [int]$restartIntune = 1,
+    [int]$checkAutopatch = 1,
+    [int]$clearRebootFlags = 1,
+    [int]$verifyCriticalServices = 1,
+    [int]$configureAppReadiness = 1,
+    [int]$runDiskCleanup = 0,
+    [int]$removePolicyBlocks = 1,
+    [int]$resetWUAgent = 1,
+    [int]$refreshPRT = 1,
+    [int]$refreshWUPolicies = 1,
+    [switch]$Verbose
+)
+#endregion
 
-# Full system repair (DISM + SFC) - Resource intensive, takes several minutes
-$fullRepair = 0
+#region Configuration - Enable/Disable Repair Steps & Thresholds
+# Configuration can be set via parameters or by editing values below
 
-# Windows Update component reset (SoftwareDistribution, catroot2)
-$resetWUComponents = 1
+# Repair Step Flags (if not provided via parameters)
+if (-not $PSBoundParameters.ContainsKey('fullRepair')) { $fullRepair = 0 }
+if (-not $PSBoundParameters.ContainsKey('resetWUComponents')) { $resetWUComponents = 1 }
+if (-not $PSBoundParameters.ContainsKey('cleanupRegistry')) { $cleanupRegistry = 1 }
+if (-not $PSBoundParameters.ContainsKey('reregisterDLLs')) { $reregisterDLLs = 1 }
+if (-not $PSBoundParameters.ContainsKey('restartIntune')) { $restartIntune = 1 }
+if (-not $PSBoundParameters.ContainsKey('checkAutopatch')) { $checkAutopatch = 1 }
+if (-not $PSBoundParameters.ContainsKey('clearRebootFlags')) { $clearRebootFlags = 1 }
+if (-not $PSBoundParameters.ContainsKey('verifyCriticalServices')) { $verifyCriticalServices = 1 }
+if (-not $PSBoundParameters.ContainsKey('configureAppReadiness')) { $configureAppReadiness = 1 }
+if (-not $PSBoundParameters.ContainsKey('runDiskCleanup')) { $runDiskCleanup = 0 }
+if (-not $PSBoundParameters.ContainsKey('removePolicyBlocks')) { $removePolicyBlocks = 1 }
+if (-not $PSBoundParameters.ContainsKey('resetWUAgent')) { $resetWUAgent = 1 }
+if (-not $PSBoundParameters.ContainsKey('refreshPRT')) { $refreshPRT = 1 }
+if (-not $PSBoundParameters.ContainsKey('refreshWUPolicies')) { $refreshWUPolicies = 1 }
 
-# Registry cleanup (remove problematic policy keys)
-$cleanupRegistry = 1
-
-# DLL re-registration (Windows Update DLLs)
-$reregisterDLLs = 1
-
-# Intune Management Extension restart
-$restartIntune = 1
-
-# Windows Autopatch configuration check and repair
-$checkAutopatch = 1
-
-# Pending reboot flags cleanup
-$clearRebootFlags = 1
-
-# Critical services verification and restart
-$verifyCriticalServices = 1
-
-# App Readiness Service configuration
-$configureAppReadiness = 1
-
-# Disk cleanup (only runs if < 20 GB free space)
-$runDiskCleanup = 0
-
-# Windows Update policy blocks removal
-$removePolicyBlocks = 1
-
-# Windows Update Agent reset
-$resetWUAgent = 1
-
-# Primary Refresh Token refresh (for Intune-only devices)
-$refreshPRT = 1
-
-# Windows Update policy refresh
-$refreshWUPolicies = 1
+# Thresholds and Limits
+$maxSoftwareDistFiles = 75      # Max files in SoftwareDistribution/Download for reset
+$minDiskSpaceGB = 20            # Minimum free disk space for cleanup trigger
+$serviceRetryCount = 3          # Number of retry attempts for service starts
+$serviceRetryDelayMs = 500      # Base delay for retry (exponential backoff)
+$logRotationSizeMB = 10         # Log rotation size threshold
+$maxLogFiles = 5                # Number of log files to keep
+$dllMinYear = 2020              # Minimum year for DLL versions
 
 #endregion
 
 # Function to log output to file and console
-$global:LogPath = "C:\ProgramData\Microsoft\IntuneManagementExtension\Logs\WindowsUpdateFix_remediation.log"
+$global:LogPath = $LogPath
 function Write-Log {
     param ([string]$message)
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
@@ -165,7 +174,99 @@ function Write-Log {
     Add-Content -Path $global:LogPath -Value $logLine
 }
 
-Write-Log "Starting comprehensive Windows Update remediation for all common issues"
+# Function to rotate log files
+function Invoke-LogRotation {
+    try {
+        if (Test-Path $global:LogPath) {
+            $logSize = (Get-Item $global:LogPath).Length / 1MB
+            if ($logSize -gt $logRotationSizeMB) {
+                Write-Output "Log rotation: Current log size $([math]::Round($logSize, 2)) MB exceeds limit"
+                
+                # Delete oldest log if max count reached
+                $oldestLog = "$global:LogPath.$maxLogFiles"
+                if (Test-Path $oldestLog) {
+                    Remove-Item $oldestLog -Force -ErrorAction SilentlyContinue
+                }
+                
+                # Rotate existing logs
+                for ($i = $maxLogFiles - 1; $i -ge 1; $i--) {
+                    $currentLog = "$global:LogPath.$i"
+                    $nextLog = "$global:LogPath.$($i + 1)"
+                    if (Test-Path $currentLog) {
+                        Move-Item $currentLog $nextLog -Force -ErrorAction SilentlyContinue
+                    }
+                }
+                
+                # Rotate current log to .1
+                Move-Item $global:LogPath "$global:LogPath.1" -Force -ErrorAction SilentlyContinue
+                Write-Output "Log rotation completed successfully"
+            }
+        }
+        
+        # Clean up old logs (older than 30 days)
+        $logDir = Split-Path $global:LogPath -Parent
+        if (Test-Path $logDir) {
+            Get-ChildItem -Path $logDir -Filter "WindowsUpdateFix_*.log*" -ErrorAction SilentlyContinue | 
+                Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-30) } | 
+                Remove-Item -Force -ErrorAction SilentlyContinue
+        }
+    }
+    catch {
+        Write-Output "Log rotation warning: $($_.Exception.Message)"
+    }
+}
+
+# Function to start service with retry logic
+function Start-ServiceWithRetry {
+    param (
+        [string]$ServiceName,
+        [string]$DisplayName,
+        [int]$MaxRetries = $serviceRetryCount,
+        [int]$BaseDelayMs = $serviceRetryDelayMs
+    )
+    
+    $attempt = 0
+    $success = $false
+    
+    while ($attempt -lt $MaxRetries -and -not $success) {
+        $attempt++
+        try {
+            Start-Service -Name $ServiceName -ErrorAction Stop
+            
+            # Wait with exponential backoff
+            $delay = $BaseDelayMs * [Math]::Pow(2, $attempt - 1)
+            Start-Sleep -Milliseconds $delay
+            
+            # Verify service is running
+            $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+            if ($service -and $service.Status -eq 'Running') {
+                Write-Log "Successfully started $DisplayName on attempt $attempt (Status: Running)"
+                $success = $true
+                return $true
+            }
+            else {
+                Write-Log "Attempt $attempt failed: $DisplayName status is $($service.Status)"
+            }
+        }
+        catch {
+            Write-Log "Attempt $attempt failed to start ${DisplayName}: $($_.Exception.Message)"
+            if ($attempt -lt $MaxRetries) {
+                $delay = $BaseDelayMs * [Math]::Pow(2, $attempt - 1)
+                Start-Sleep -Milliseconds $delay
+            }
+        }
+    }
+    
+    if (-not $success) {
+        Write-Log "ERROR: Failed to start $DisplayName after $MaxRetries attempts"
+        return $false
+    }
+}
+
+# Perform log rotation
+Invoke-LogRotation
+
+Write-Log "Starting comprehensive Windows Update remediation for all common issues (v3.3)"
 
 # Check for TPM
 $tpmStatus = Get-WmiObject -Namespace "Root\CIMv2\Security\MicrosoftTpm" -Class Win32_Tpm
@@ -199,8 +300,8 @@ function Test-WUComponentsNeedReset {
     $downloadFolder = "C:\Windows\SoftwareDistribution\Download"
     if (Test-Path $downloadFolder) {
         $downloadFiles = Get-ChildItem $downloadFolder -ErrorAction SilentlyContinue
-        if ($downloadFiles.Count -gt 50) {
-            Write-Log "SoftwareDistribution has $($downloadFiles.Count) files - reset needed"
+        if ($downloadFiles.Count -gt $maxSoftwareDistFiles) {
+            Write-Log "SoftwareDistribution has $($downloadFiles.Count) files - reset needed (threshold: $maxSoftwareDistFiles)"
             $needsReset = $true
         }
     }
@@ -325,19 +426,17 @@ if ($cleanupRegistry -eq 1) {
 
 # Restart services only if they were stopped
 if ($servicesNeedingRestart.Count -gt 0) {
-    $servicesToRestart = @('BITS', 'wuauserv', 'CryptSvc', 'msiserver')
-    foreach ($svcName in $servicesToRestart) {
-        try {
-            Start-Service -Name $svcName -ErrorAction Stop
-            Start-Sleep -Milliseconds 500
-            $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
-            if ($svc -and $svc.Status -eq 'Running') {
-                Write-Log "Successfully restarted service: $svcName (Status: Running)"
-            } else {
-                Write-Log "Warning: Service $svcName may not have started correctly (Status: $($svc.Status))"
-            }
-        } catch {
-            Write-Log "Error restarting service ${svcName}: $($_.Exception.Message)"
+    $servicesToRestart = @(
+        @{Name = 'BITS'; Display = 'Background Intelligent Transfer Service'},
+        @{Name = 'wuauserv'; Display = 'Windows Update'},
+        @{Name = 'CryptSvc'; Display = 'Cryptographic Services'},
+        @{Name = 'msiserver'; Display = 'Windows Installer'}
+    )
+    
+    foreach ($svc in $servicesToRestart) {
+        $result = Start-ServiceWithRetry -ServiceName $svc.Name -DisplayName $svc.Display
+        if (-not $result) {
+            Write-Log "WARNING: Service $($svc.Display) may require manual intervention"
         }
     }
     Write-Log "Windows Update services restart sequence completed"
@@ -391,6 +490,48 @@ $dlls = @(
         }
     }
     Write-Log "DLL re-registration completed: $registeredCount succeeded, $failedCount failed/skipped"
+        
+        # Validate DLL registration by checking versions and COM interface
+        Write-Log "Validating DLL registration..."
+        $validationPassed = $true
+        
+        # Check critical Windows Update DLL versions
+        $criticalDLLs = @("wuapi.dll", "wuaueng.dll", "wups2.dll")
+        foreach ($dllName in $criticalDLLs) {
+            $dllPath = "$env:SystemRoot\System32\$dllName"
+            if (Test-Path $dllPath) {
+                $dllInfo = Get-Item $dllPath -ErrorAction SilentlyContinue
+                if ($dllInfo) {
+                    $dllDate = $dllInfo.LastWriteTime
+                    if ($dllDate.Year -lt $dllMinYear) {
+                        Write-Log "WARNING: $dllName is outdated (Date: $($dllDate.ToString('yyyy-MM-dd')))"
+                        $validationPassed = $false
+                    }
+                    else {
+                        Write-Log "Validation passed: $dllName (Date: $($dllDate.ToString('yyyy-MM-dd')))"
+                    }
+                }
+            }
+        }
+        
+        # Re-test COM interface after registration
+        try {
+            $updateSession = New-Object -ComObject Microsoft.Update.Session -ErrorAction Stop
+            $updateSearcher = $updateSession.CreateUpdateSearcher()
+            $searchResult = $updateSearcher.Search("IsInstalled=0 and IsHidden=0")
+            Write-Log "COM interface validation passed: $($searchResult.Updates.Count) updates available"
+        }
+        catch {
+            Write-Log "WARNING: COM interface validation failed: $($_.Exception.Message)"
+            $validationPassed = $false
+        }
+        
+        if ($validationPassed) {
+            Write-Log "DLL registration validation completed successfully"
+        }
+        else {
+            Write-Log "WARNING: DLL registration validation found issues - manual review may be needed"
+        }
     }
 } else {
     Write-Log "DLL re-registration disabled in configuration - skipping"
@@ -661,22 +802,52 @@ if ($refreshWUPolicies -eq 1) {
     Write-Log "Windows Update policy refresh disabled in configuration - skipping"
 }
 
-# Clear pending reboot flags only if they exist
+# Clear pending reboot flags only if they exist (safe flags only, not Setup-related)
 if ($clearRebootFlags -eq 1) {
     Write-Log "Checking for pending reboot flags..."
-    $rebootFlagsCleared = $false
+    $rebootFlagsCleared = 0
+    
     try {
-        if (Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending") {
-            Remove-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending" -Force -ErrorAction SilentlyContinue
-            Write-Log "Cleared Component Based Servicing RebootPending flag"
-            $rebootFlagsCleared = $true
+        # Safe reboot flags that can be cleared
+        $safeRebootFlags = @(
+            "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending",
+            "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\PackagesPending",
+            "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired"
+        )
+        
+        foreach ($flagPath in $safeRebootFlags) {
+            if (Test-Path $flagPath) {
+                try {
+                    Remove-Item -Path $flagPath -Recurse -Force -ErrorAction Stop
+                    Write-Log "Cleared reboot flag: $flagPath"
+                    $rebootFlagsCleared++
+                }
+                catch {
+                    Write-Log "Could not clear $flagPath`: $($_.Exception.Message)"
+                }
+            }
         }
         
-        if (-not $rebootFlagsCleared) {
-            Write-Log "No safe reboot flags found - skipping"
+        # Check PendingFileRenameOperations (only log, don't clear - may be critical)
+        $pendingFileRename = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager" -Name PendingFileRenameOperations -ErrorAction SilentlyContinue
+        if ($pendingFileRename) {
+            Write-Log "INFO: PendingFileRenameOperations detected - Not clearing (may be critical system files)"
+        }
+        
+        # Check PendingFileRenameOperations2 (rarely used, but check for completeness)
+        $pendingFileRename2 = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager" -Name PendingFileRenameOperations2 -ErrorAction SilentlyContinue
+        if ($pendingFileRename2) {
+            Write-Log "INFO: PendingFileRenameOperations2 detected - Not clearing (may be critical system files)"
+        }
+        
+        if ($rebootFlagsCleared -eq 0) {
+            Write-Log "No safe reboot flags found to clear"
+        }
+        else {
+            Write-Log "Cleared $rebootFlagsCleared reboot flag(s)"
         }
     } catch {
-        Write-Log "Error clearing reboot flags: $($_.Exception.Message)"
+        Write-Log "Error checking reboot flags: $($_.Exception.Message)"
     }
 } else {
     Write-Log "Pending reboot flags cleanup disabled in configuration - skipping"
@@ -699,17 +870,13 @@ foreach ($svcName in $criticalServices.Keys) {
         $service = Get-Service -Name $svcName -ErrorAction SilentlyContinue
         if ($service) {
             if ($service.Status -ne "Running") {
-                Write-Log "Service $($criticalServices[$svcName]) is not running - Starting..."
-                Start-Service -Name $svcName -ErrorAction Stop
-                Start-Sleep -Milliseconds 500
-                
-                # Verify service started successfully
-                $service = Get-Service -Name $svcName -ErrorAction SilentlyContinue
-                if ($service -and $service.Status -eq "Running") {
-                    Write-Log "Successfully started $($criticalServices[$svcName]) (Status: Running)"
+                Write-Log "Service $($criticalServices[$svcName]) is not running - Starting with retry logic..."
+                $result = Start-ServiceWithRetry -ServiceName $svcName -DisplayName $criticalServices[$svcName]
+                if ($result) {
                     $servicesFixed++
-                } else {
-                    Write-Log "Warning: Failed to start $($criticalServices[$svcName]) (Status: $($service.Status))"
+                }
+                else {
+                    Write-Log "WARNING: Failed to start $($criticalServices[$svcName]) after retries"
                 }
             }
             
