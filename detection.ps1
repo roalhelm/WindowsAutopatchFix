@@ -16,11 +16,12 @@
 .NOTES
     File Name     : detection.ps1
     Author        : Ronny Alhelm
-    Version       : 2.3
+    Version       : 2.4
     Creation Date : 2024-09-30
     Last Updated  : 2026-06-02
 
 .CHANGES
+    2.4 - Update agent test uses an offline search; WSUS values are not an issue on devices with a Configuration Manager client
     2.2 - Enhanced diagnostics: Added BitLocker check, DLL version validation, service dependency checks
           Extended network tests: HTTP connectivity, DNS resolution, proxy detection
           Improved error reporting: Error code dictionary with descriptions, enhanced Client Broker health check
@@ -148,7 +149,7 @@ try {
     $exitCode = 0
     $issues = @()
     
-    Write-Log "Starting Windows Update health detection for all common issues (v2.3)"
+    Write-Log "Starting Windows Update health detection for all common issues (v2.4)"
     
     # Check BitLocker status (informational - may block feature updates)
     try {
@@ -384,7 +385,9 @@ try {
         $updateSession = New-Object -ComObject Microsoft.Update.Session -ErrorAction SilentlyContinue
         if ($updateSession) {
             $updateSearcher = $updateSession.CreateUpdateSearcher()
-            # Try a simple search to test Windows Update functionality
+            # Offline search: tests the agent and its database. A network or service outage must not
+            # look like a corrupted client (connectivity has its own check further down).
+            $updateSearcher.Online = $false
             $null = $updateSearcher.Search("IsInstalled=0 and IsHidden=0")
         }
         else {
@@ -533,9 +536,15 @@ try {
     }
     
     # Check for Windows Update for Business configuration
+    # On devices with a Configuration Manager client the WSUS values are set on purpose
+    # (software update point). They are reported as information and do not trigger remediation.
+    $configMgrClient = Get-Service -Name CcmExec -ErrorAction SilentlyContinue
     try {
         $wufbPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"
-        if (Test-Path $wufbPath) {
+        if ($configMgrClient) {
+            Write-Log "INFO: Configuration Manager client found (CcmExec) - WSUS policy values are expected and not checked"
+        }
+        elseif (Test-Path $wufbPath) {
             $doNotConnectToWindowsUpdateInternetLocations = (Get-ItemProperty -Path $wufbPath -Name DoNotConnectToWindowsUpdateInternetLocations -ErrorAction SilentlyContinue).DoNotConnectToWindowsUpdateInternetLocations
             if ($doNotConnectToWindowsUpdateInternetLocations -eq 1) {
                 $issues += "Windows Update is blocked from connecting to Internet locations (policy conflict)"
@@ -550,7 +559,7 @@ try {
         
         # Check if UseWUServer is enabled (forces WSUS instead of Windows Update)
         $wuAUPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU"
-        if (Test-Path $wuAUPath) {
+        if (-not $configMgrClient -and (Test-Path $wuAUPath)) {
             $useWUServer = (Get-ItemProperty -Path $wuAUPath -Name UseWUServer -ErrorAction SilentlyContinue).UseWUServer
             if ($useWUServer -eq 1) {
                 $issues += "UseWUServer is enabled (forces WSUS, blocks Windows Autopatch)"

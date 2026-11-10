@@ -3,7 +3,7 @@
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Intune](https://img.shields.io/badge/Microsoft-Intune-0078D4.svg)](https://intune.microsoft.com)
-[![Version](https://img.shields.io/badge/Version-3.4%20%2F%202.3-brightgreen.svg)](https://github.com/roalhelm/WindowsAutopatchFix)
+[![Version](https://img.shields.io/badge/Version-3.5%20%2F%202.4-brightgreen.svg)](https://github.com/roalhelm/WindowsAutopatchFix)
 
 Intelligent detection and remediation for Windows Update failures. Configurable repair steps that only execute when needed, minimizing system impact.
 
@@ -41,10 +41,10 @@ Windows 10/11 | Microsoft Intune | PowerShell 5.1+ | System/Admin permissions
 
 ## 📁 Files
 
-**`detection.ps1`** (v2.3) - Enhanced diagnostics with BitLocker check, DLL version validation, service dependencies, extended network tests, error code dictionary  
+**`detection.ps1`** (v2.4) - Enhanced diagnostics with BitLocker check, DLL version validation, service dependencies, extended network tests, error code dictionary  
 Exit: `0` = healthy | `1` = issues (triggers remediation)
 
-**`remediation.ps1`** (v3.4) - Intelligent repair with 15 configurable steps, service retry logic, DLL validation, pending reboot reporting
+**`remediation.ps1`** (v3.5) - Intelligent repair with 15 configurable steps, service retry logic, DLL validation, pending reboot reporting
 
 **`Test-WindowsUpdateFix.ps1`** - Local validation script for testing before Intune deployment
 

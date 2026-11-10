@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.5 / 2.4] - 2026-11-10
+
+### Changed - remediation.ps1 v3.5 (safer repair steps)
+
+- **Component reset**: `SoftwareDistribution` and `catroot2` are renamed (`*.wufix-old-<timestamp>`) instead of deleted, and `CryptSvc` is stopped first so `catroot2` can actually be moved. The backup from an earlier run is removed before a new one is created.
+- **Services**: No service is stopped just because it is idle. `msiserver` is never touched (stopping it can abort a running installation). A disabled service gets its default start type back; nothing is forced to `Automatic`. Only `CryptSvc` and the Intune Management Extension are started when stopped.
+- **Update agent reset**: The registry key `HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate` is no longer deleted. The step restarts `wuauserv` and tests again, using an offline search so a network outage does not look like a broken agent.
+- **Policy refresh**: Triggers `UsoClient StartScan` only. `DataStore.edb`, its logs and the `Auto Update\Results` key are no longer deleted on every run, and the legacy `wuauclt` call is gone.
+- **Registry cleanup**: `HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection` (diagnostic data policy) is no longer deleted.
+- **WSUS values**: Left unchanged on devices with a Configuration Manager client (`CcmExec`).
+- **Full repair**: `DISM /StartComponentCleanup` runs without `/ResetBase`, so installed updates can still be uninstalled.
+- **Exit code**: `1` when at least one step failed, `0` otherwise. Before, the script always returned `0`.
+- **Robustness**: Secure Boot check no longer fails on legacy BIOS devices; the final service report works when service verification is disabled; Disk Cleanup start parameters fixed.
+
+### Changed - detection.ps1 v2.4
+
+- **Update agent test** uses an offline search.
+- **WSUS values** are not reported as an issue on devices with a Configuration Manager client.
+
 ## [3.4 / 2.3] - 2026-11-10
 
 ### Fixed - detection.ps1 v2.3 (false positives)
