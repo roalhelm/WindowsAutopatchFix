@@ -3,7 +3,7 @@
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Intune](https://img.shields.io/badge/Microsoft-Intune-0078D4.svg)](https://intune.microsoft.com)
-[![Version](https://img.shields.io/badge/Version-3.3%20%2F%202.2-brightgreen.svg)](https://github.com/roalhelm/WindowsAutopatchFix)
+[![Version](https://img.shields.io/badge/Version-3.4%20%2F%202.3-brightgreen.svg)](https://github.com/roalhelm/WindowsAutopatchFix)
 
 Intelligent detection and remediation for Windows Update failures. Configurable repair steps that only execute when needed, minimizing system impact.
 
@@ -16,7 +16,7 @@ Smart, targeted Windows Update repair for Intune-managed devices.
 - **Fully Configurable** - 15 independent repair steps with parameter support
 - **Robust Reliability** - Service start retry logic (3 attempts, exponential backoff)
 - **Minimal Impact** - Skips unnecessary operations, intelligent thresholds
-- **Enhanced Validation** - DLL version checks, extended reboot flag cleanup, error code descriptions
+- **Enhanced Validation** - DLL version checks, pending reboot reporting, error code descriptions
 - **Auto Log Rotation** - 10 MB limit, keeps last 5 logs
 - **20+ Error Codes** - Comprehensive coverage with error code dictionary
 
@@ -41,10 +41,10 @@ Windows 10/11 | Microsoft Intune | PowerShell 5.1+ | System/Admin permissions
 
 ## 📁 Files
 
-**`detection.ps1`** (v2.2) - Enhanced diagnostics with BitLocker check, DLL version validation, service dependencies, extended network tests, error code dictionary  
+**`detection.ps1`** (v2.3) - Enhanced diagnostics with BitLocker check, DLL version validation, service dependencies, extended network tests, error code dictionary  
 Exit: `0` = healthy | `1` = issues (triggers remediation)
 
-**`remediation.ps1`** (v3.3) - Intelligent repair with 15 configurable steps, service retry logic, DLL validation, extended reboot flag cleanup
+**`remediation.ps1`** (v3.4) - Intelligent repair with 15 configurable steps, service retry logic, DLL validation, pending reboot reporting
 
 **`Test-WindowsUpdateFix.ps1`** - Local validation script for testing before Intune deployment
 
@@ -86,7 +86,7 @@ $reregisterDLLs = 1          # DLL re-registration
 $restartIntune = 1           # Intune restart
 $checkAutopatch = 1          # Autopatch check
 $removeSetupBlocks = 1       # Setup blocks
-$clearRebootFlags = 1        # Reboot flags
+$clearRebootFlags = 1        # Report pending reboot flags (never cleared)
 $verifyCriticalServices = 1  # Services
 $configureAppReadiness = 1   # App Readiness
 $runDiskCleanup = 1          # Disk cleanup (<20GB)
