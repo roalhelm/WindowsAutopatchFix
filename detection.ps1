@@ -16,7 +16,7 @@
 .NOTES
     File Name     : detection.ps1
     Author        : Ronny Alhelm
-    Version       : 2.2
+    Version       : 2.3
     Creation Date : 2024-09-30
     Last Updated  : 2026-06-02
 
@@ -148,7 +148,7 @@ try {
     $exitCode = 0
     $issues = @()
     
-    Write-Log "Starting Windows Update health detection for all common issues (v2.2)"
+    Write-Log "Starting Windows Update health detection for all common issues (v2.3)"
     
     # Check BitLocker status (informational - may block feature updates)
     try {
@@ -270,9 +270,17 @@ try {
     
     # Check Windows Update service status
     try {
+        # wuauserv is a demand-start (trigger start) service and is normally stopped when idle.
+        # Only a missing or disabled service is a real problem.
         $wuauserv = Get-Service -Name wuauserv -ErrorAction SilentlyContinue
-        if (-not $wuauserv -or $wuauserv.Status -ne "Running") {
-            $issues += "Windows Update service is not running: $($wuauserv.Status)"
+        if (-not $wuauserv) {
+            $issues += "Windows Update service (wuauserv) not found"
+        }
+        elseif ($wuauserv.StartType -eq "Disabled") {
+            $issues += "Windows Update service is disabled"
+        }
+        else {
+            Write-Log "Windows Update service check passed (Status: $($wuauserv.Status), StartType: $($wuauserv.StartType))"
         }
     }
     catch {
@@ -292,9 +300,17 @@ try {
     
     # Check BITS service status
     try {
+        # BITS is a demand-start service and is normally stopped when no transfer is queued.
+        # Only a missing or disabled service is a real problem.
         $bits = Get-Service -Name BITS -ErrorAction SilentlyContinue
-        if (-not $bits -or $bits.Status -ne "Running") {
-            $issues += "BITS service is not running: $($bits.Status)"
+        if (-not $bits) {
+            $issues += "BITS service not found"
+        }
+        elseif ($bits.StartType -eq "Disabled") {
+            $issues += "BITS service is disabled"
+        }
+        else {
+            Write-Log "BITS service check passed (Status: $($bits.Status), StartType: $($bits.StartType))"
         }
     }
     catch {
@@ -504,7 +520,12 @@ try {
     try {
         $policyManagerPath = "HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Update"
         if (Test-Path $policyManagerPath) {
-            $issues += "PolicyManager Update registry key exists (may interfere with Windows Update)"
+            # This key holds the Intune (MDM) update policies and is expected on every
+            # managed device. It is not an issue and must never trigger remediation.
+            Write-Log "INFO: Intune update policies present (PolicyManager Update key exists - expected)"
+        }
+        else {
+            Write-Log "INFO: No Intune update policies found (PolicyManager Update key missing)"
         }
     }
     catch {
@@ -598,7 +619,9 @@ try {
         }
         
         if ($rebootPending) {
-            $issues += "System reboot is pending (may block new updates)"
+            # Informational only: remediation must not clear reboot flags, so a pending
+            # reboot cannot be fixed by the script and must not trigger it.
+            Write-Log "INFO: System reboot is pending (may block new updates) - restart the device"
         }
     }
     catch {
@@ -614,7 +637,10 @@ try {
             $cbsLogSize = (Get-Item $cbsLogPath -ErrorAction SilentlyContinue).Length / 1MB
             if ($cbsLogSize -lt 50) {
                 $cbsLog = Get-Content $cbsLogPath -Tail 100 -ErrorAction SilentlyContinue
-                if ($cbsLog -match "corrupt|failed|error") {
+                # Match only real corruption markers. Generic words like "error" or "failed"
+                # appear in every healthy CBS.log and caused constant false positives.
+                $cbsCorruptionPattern = '\[SR\] Cannot repair|\[SR\] Could not reproject|CBS_E_STORE_CORRUPTION|ERROR_SXS_COMPONENT_STORE_CORRUPT|0x80073712|0x800f0831|Store corruption'
+                if ($cbsLog -match $cbsCorruptionPattern) {
                     $issues += "CBS log indicates potential system file corruption (0x800F0922, 0x800F0831)"
                 }
             } else {

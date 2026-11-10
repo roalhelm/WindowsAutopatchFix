@@ -19,7 +19,7 @@
     - Windows Autopatch configuration check and repair
     - Registry policy cleanup (WSUS, GPO conflicts)
     - DLL re-registration (Windows Update DLLs)
-    - Pending reboot flags cleanup
+    - Pending reboot flags report (flags are never cleared)
     - Critical services verification
     - Disk cleanup (when < 20 GB free space)
     - Windows Update policy blocks removal
@@ -33,11 +33,12 @@
 .NOTES
     File Name     : remediation.ps1
     Author        : Ronny Alhelm
-    Version       : 3.3
+    Version       : 3.4
     Creation Date : 2024-09-19
     Last Updated  : 2026-06-02
 
 .CHANGES
+    3.4 - Safety: Intune PolicyManager Update key is no longer deleted; pending reboot flags are reported, never cleared
     3.3 - Enhanced reliability: Service start with retry logic (3 attempts, exponential backoff)
           Extended validation: DLL version checks after registration, enhanced reboot flag cleanup
           Better configuration: All repair flags as parameters, configurable thresholds
@@ -74,7 +75,7 @@
     Set to 1 to enable Windows Autopatch configuration check. Default: 1
 
 .PARAMETER clearRebootFlags
-    Set to 1 to enable pending reboot flags cleanup. Default: 1
+    Set to 1 to report pending reboot flags. Flags are never cleared (since 3.4). Default: 1
 
 .PARAMETER verifyCriticalServices
     Set to 1 to enable critical services verification. Default: 1
@@ -266,7 +267,7 @@ function Start-ServiceWithRetry {
 # Perform log rotation
 Invoke-LogRotation
 
-Write-Log "Starting comprehensive Windows Update remediation for all common issues (v3.3)"
+Write-Log "Starting comprehensive Windows Update remediation for all common issues (v3.4)"
 
 # Check for TPM
 $tpmStatus = Get-WmiObject -Namespace "Root\CIMv2\Security\MicrosoftTpm" -Class Win32_Tpm
@@ -397,8 +398,9 @@ if ($resetWUComponents -eq 1) {
 if ($cleanupRegistry -eq 1) {
     $registryKeysDeleted = 0
     # These keys are typically set by WSUS/GPO and can conflict with Intune-managed updates
+    # NOTE: HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Update is NOT in this list.
+    # It holds the Intune (MDM) update ring policies and must never be deleted.
     $registryKeys = @(
-        "HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Update",
         "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection",
         "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Appraiser\GWX"
     )
@@ -802,55 +804,43 @@ if ($refreshWUPolicies -eq 1) {
     Write-Log "Windows Update policy refresh disabled in configuration - skipping"
 }
 
-# Clear pending reboot flags only if they exist (safe flags only, not Setup-related)
+# Pending reboot flags are reported but NEVER cleared.
+# Deleting RebootPending / PackagesPending / RebootRequired leaves servicing operations
+# unfinished and can corrupt the component store. The only safe fix is a restart.
+# The $clearRebootFlags parameter is kept for compatibility and now only controls this report.
 if ($clearRebootFlags -eq 1) {
-    Write-Log "Checking for pending reboot flags..."
-    $rebootFlagsCleared = 0
-    
+    Write-Log "Checking for pending reboot flags (report only)..."
     try {
-        # Safe reboot flags that can be cleared
-        $safeRebootFlags = @(
+        $rebootFlags = @(
             "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending",
             "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\PackagesPending",
             "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired"
         )
-        
-        foreach ($flagPath in $safeRebootFlags) {
+        $rebootFlagsFound = 0
+        foreach ($flagPath in $rebootFlags) {
             if (Test-Path $flagPath) {
-                try {
-                    Remove-Item -Path $flagPath -Recurse -Force -ErrorAction Stop
-                    Write-Log "Cleared reboot flag: $flagPath"
-                    $rebootFlagsCleared++
-                }
-                catch {
-                    Write-Log "Could not clear $flagPath`: $($_.Exception.Message)"
-                }
+                Write-Log "INFO: Pending reboot flag present (not cleared): $flagPath"
+                $rebootFlagsFound++
             }
         }
-        
-        # Check PendingFileRenameOperations (only log, don't clear - may be critical)
+
         $pendingFileRename = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager" -Name PendingFileRenameOperations -ErrorAction SilentlyContinue
         if ($pendingFileRename) {
-            Write-Log "INFO: PendingFileRenameOperations detected - Not clearing (may be critical system files)"
+            Write-Log "INFO: PendingFileRenameOperations detected (not cleared)"
+            $rebootFlagsFound++
         }
-        
-        # Check PendingFileRenameOperations2 (rarely used, but check for completeness)
-        $pendingFileRename2 = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager" -Name PendingFileRenameOperations2 -ErrorAction SilentlyContinue
-        if ($pendingFileRename2) {
-            Write-Log "INFO: PendingFileRenameOperations2 detected - Not clearing (may be critical system files)"
-        }
-        
-        if ($rebootFlagsCleared -eq 0) {
-            Write-Log "No safe reboot flags found to clear"
+
+        if ($rebootFlagsFound -eq 0) {
+            Write-Log "No pending reboot flags found"
         }
         else {
-            Write-Log "Cleared $rebootFlagsCleared reboot flag(s)"
+            Write-Log "WARNING: A restart is pending - restart the device to finish servicing operations"
         }
     } catch {
         Write-Log "Error checking reboot flags: $($_.Exception.Message)"
     }
 } else {
-    Write-Log "Pending reboot flags cleanup disabled in configuration - skipping"
+    Write-Log "Pending reboot flag check disabled in configuration - skipping"
 }
 
 # Verify and start critical services only if they are not running

@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.4 / 2.3] - 2026-11-10
+
+### Fixed - detection.ps1 v2.3 (false positives)
+
+- **Intune policy key**: `HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Update` is no longer reported as an issue. The key holds the Intune update ring policies and exists on every managed device.
+- **wuauserv and BITS**: A stopped service is no longer an issue. Both are demand-start services and are normally stopped when idle. Only a missing or disabled service is reported.
+- **CBS.log**: The check now matches real corruption markers (`[SR] Cannot repair`, `CBS_E_STORE_CORRUPTION`, `0x80073712`, `0x800f0831`, ...) instead of the generic words `corrupt|failed|error`.
+- **Pending reboot**: Logged as information and no longer triggers remediation, because remediation cannot (and must not) resolve it.
+
+### Fixed - remediation.ps1 v3.4 (destructive steps removed)
+
+- **Intune policy key**: `PolicyManager\current\device\Update` is no longer deleted by the registry cleanup step.
+- **Pending reboot flags**: `RebootPending`, `PackagesPending` and `RebootRequired` are no longer deleted. Clearing them leaves servicing operations unfinished and can corrupt the component store. The `clearRebootFlags` parameter is kept for compatibility and now only reports the flags.
+
 ## [3.3 / 2.2] - 2026-06-02
 
 ### ✨ Added - detection.ps1 v2.2
