@@ -639,7 +639,7 @@ try {
                 $cbsLog = Get-Content $cbsLogPath -Tail 100 -ErrorAction SilentlyContinue
                 # Match only real corruption markers. Generic words like "error" or "failed"
                 # appear in every healthy CBS.log and caused constant false positives.
-                $cbsCorruptionPattern = '\[SR\] Cannot repair|\[SR\] Could not reproject|CBS_E_STORE_CORRUPTION|ERROR_SXS_COMPONENT_STORE_CORRUPT|0x80073712|0x800f0831|Store corruption'
+                $cbsCorruptionPattern = '\[SR\] Cannot repair|\[SR\] Could not reproject|CBS_E_STORE_CORRUPTION|ERROR_SXS_COMPONENT_STORE_CORRUPT|0x80073712|0x800f0831'
                 if ($cbsLog -match $cbsCorruptionPattern) {
                     $issues += "CBS log indicates potential system file corruption (0x800F0922, 0x800F0831)"
                 }

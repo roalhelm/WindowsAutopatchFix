@@ -830,6 +830,12 @@ if ($clearRebootFlags -eq 1) {
             $rebootFlagsFound++
         }
 
+        $pendingFileRename2 = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager" -Name PendingFileRenameOperations2 -ErrorAction SilentlyContinue
+        if ($pendingFileRename2) {
+            Write-Log "INFO: PendingFileRenameOperations2 detected (not cleared)"
+            $rebootFlagsFound++
+        }
+
         if ($rebootFlagsFound -eq 0) {
             Write-Log "No pending reboot flags found"
         }
