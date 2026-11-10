@@ -33,11 +33,14 @@
 .NOTES
     File Name     : remediation.ps1
     Author        : Ronny Alhelm
-    Version       : 3.4
+    Version       : 3.5
     Creation Date : 2024-09-19
-    Last Updated  : 2026-06-02
+    Last Updated  : 2026-11-10
 
 .CHANGES
+    3.5 - Safety: component reset renames instead of deleting; no service is stopped or forced to Automatic without need;
+          WSUS values are kept on co-managed devices; WindowsUpdate registry key and update database are no longer deleted;
+          exit code 1 when a step failed
     3.4 - Safety: Intune PolicyManager Update key is no longer deleted; pending reboot flags are reported, never cleared
     3.3 - Enhanced reliability: Service start with retry logic (3 attempts, exponential backoff)
           Extended validation: DLL version checks after registration, enhanced reboot flag cleanup
@@ -167,8 +170,11 @@ $dllMinYear = 2020              # Minimum year for DLL versions
 
 # Function to log output to file and console
 $global:LogPath = $LogPath
+$global:RemediationErrors = 0
 function Write-Log {
     param ([string]$message)
+    # Lines that start with "Error", "ERROR:" or "Failed" mark a failed step and decide the exit code.
+    if ($message -cmatch '^(ERROR|Error|Failed)\b') { $global:RemediationErrors++ }
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $logLine = "$timestamp - $message"
     Write-Output $logLine
@@ -267,7 +273,7 @@ function Start-ServiceWithRetry {
 # Perform log rotation
 Invoke-LogRotation
 
-Write-Log "Starting comprehensive Windows Update remediation for all common issues (v3.4)"
+Write-Log "Starting comprehensive Windows Update remediation for all common issues (v3.5)"
 
 # Check for TPM
 $tpmStatus = Get-CimInstance -Namespace "Root\CIMv2\Security\MicrosoftTpm" -ClassName Win32_Tpm -ErrorAction SilentlyContinue
@@ -278,7 +284,9 @@ if ($tpmStatus -and $tpmStatus.IsActivated_InitialValue -eq $true) {
 }
 
 # Check Secure Boot status
-$secureBoot = Confirm-SecureBootUEFI
+# Confirm-SecureBootUEFI throws on legacy BIOS systems and when not elevated
+$secureBoot = $false
+try { $secureBoot = Confirm-SecureBootUEFI -ErrorAction Stop } catch { Write-Log "Secure Boot state could not be read: $($_.Exception.Message)" }
 if ($secureBoot) {
     Write-Log "Secure Boot is enabled"
 } else {
@@ -316,36 +324,17 @@ function Test-WUComponentsNeedReset {
     return $needsReset
 }
 
-# Function to check if services are not running
-function Test-ServicesNeedRestart {
-    $servicesNeedingRestart = @()
-    $servicesToCheck = @('BITS', 'wuauserv', 'CryptSvc', 'msiserver')
-    
-    foreach ($svc in $servicesToCheck) {
-        $service = Get-Service -Name $svc -ErrorAction SilentlyContinue
-        if ($service -and $service.Status -ne "Running") {
-            $servicesNeedingRestart += $svc
-        }
+# Report the state of the update services. Nothing is stopped here.
+# wuauserv, BITS and msiserver are demand-start services: "Stopped" is their normal idle state.
+# Stopping msiserver could abort a running installation, so this script never touches it.
+$componentsReset = $false
+foreach ($svc in @('BITS', 'wuauserv', 'CryptSvc')) {
+    $service = Get-Service -Name $svc -ErrorAction SilentlyContinue
+    if ($service) {
+        Write-Log "Service $svc`: Status $($service.Status), StartType $($service.StartType)"
+    } else {
+        Write-Log "Service $svc not found"
     }
-    
-    return $servicesNeedingRestart
-}
-
-# Check if services need to be restarted
-$servicesNeedingRestart = Test-ServicesNeedRestart
-if ($servicesNeedingRestart.Count -gt 0) {
-    Write-Log "Services not running: $($servicesNeedingRestart -join ', ') - Stopping and restarting..."
-    $servicesToStop = @('BITS', 'wuauserv', 'CryptSvc', 'msiserver')
-    foreach ($svc in $servicesToStop) {
-        try {
-            Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue
-            Write-Log "Stopped service: $svc"
-        } catch {
-            Write-Log "Could not stop service $svc`: $($_.Exception.Message)"
-        }
-    }
-} else {
-    Write-Log "All Windows Update services are running - skipping service restart"
 }
 
 # Optional: Run DISM health scan and repair (only if $fullRepair = 1)
@@ -359,7 +348,8 @@ if ($fullRepair -eq 1) {
         Write-Log "DISM RestoreHealth completed"
         
         # Additional DISM cleanup
-        $dismCleanup = & DISM.exe /Online /Cleanup-Image /StartComponentCleanup /ResetBase 2>&1
+        # No /ResetBase: it would make every installed update impossible to uninstall.
+        $dismCleanup = & DISM.exe /Online /Cleanup-Image /StartComponentCleanup 2>&1
         Write-Log "DISM Component Cleanup completed"
     } catch {
         Write-Log "Error running DISM: $($_.Exception.Message)"
@@ -381,11 +371,32 @@ if ($fullRepair -eq 1) {
 if ($resetWUComponents -eq 1) {
     if (Test-WUComponentsNeedReset) {
         Write-Log "Resetting Windows Update components..."
-        Stop-Service -Name BITS -Force -Verbose -ErrorAction SilentlyContinue
-        Stop-Service -Name wuauserv -Force -Verbose -ErrorAction SilentlyContinue
-        
-        Remove-Item -Path "C:\Windows\SoftwareDistribution" -Recurse -Force -ErrorAction SilentlyContinue
-        Remove-Item -Path "C:\Windows\System32\catroot2" -Recurse -Force -ErrorAction SilentlyContinue
+        # CryptSvc holds catroot2 open, so it has to be stopped as well.
+        foreach ($svc in @('BITS', 'wuauserv', 'CryptSvc')) {
+            Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue
+        }
+
+        # Rename instead of delete: Windows rebuilds both folders, and the old content stays available for rollback.
+        # Backups from an earlier run of this script are removed first so they cannot fill the disk.
+        $stamp = Get-Date -Format "yyyyMMddHHmmss"
+        $resetTargets = @(
+            @{Parent = "C:\Windows"; Name = "SoftwareDistribution"},
+            @{Parent = "C:\Windows\System32"; Name = "catroot2"}
+        )
+        foreach ($target in $resetTargets) {
+            $folder = Join-Path $target.Parent $target.Name
+            Get-ChildItem -Path $target.Parent -Directory -Filter "$($target.Name).wufix-old-*" -ErrorAction SilentlyContinue |
+                Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+            if (Test-Path $folder) {
+                try {
+                    Rename-Item -Path $folder -NewName "$($target.Name).wufix-old-$stamp" -ErrorAction Stop
+                    Write-Log "Renamed $folder to $($target.Name).wufix-old-$stamp"
+                } catch {
+                    Write-Log "Error renaming $folder`: $($_.Exception.Message)"
+                }
+            }
+        }
+        $componentsReset = $true
         Write-Log "Windows Update components reset completed"
     } else {
         Write-Log "Windows Update components are healthy - skipping reset"
@@ -400,8 +411,9 @@ if ($cleanupRegistry -eq 1) {
     # These keys are typically set by WSUS/GPO and can conflict with Intune-managed updates
     # NOTE: HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Update is NOT in this list.
     # It holds the Intune (MDM) update ring policies and must never be deleted.
+    # NOTE: HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection is NOT in this list either.
+    # It holds the diagnostic data (telemetry) policy that Autopatch and Windows Update reports depend on.
     $registryKeys = @(
-        "HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection",
         "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Appraiser\GWX"
     )
 
@@ -426,13 +438,12 @@ if ($cleanupRegistry -eq 1) {
     Write-Log "Registry cleanup disabled in configuration - skipping"
 }
 
-# Restart services only if they were stopped
-if ($servicesNeedingRestart.Count -gt 0) {
+# Start the services again only if the component reset stopped them
+if ($componentsReset) {
     $servicesToRestart = @(
-        @{Name = 'BITS'; Display = 'Background Intelligent Transfer Service'},
-        @{Name = 'wuauserv'; Display = 'Windows Update'},
         @{Name = 'CryptSvc'; Display = 'Cryptographic Services'},
-        @{Name = 'msiserver'; Display = 'Windows Installer'}
+        @{Name = 'BITS'; Display = 'Background Intelligent Transfer Service'},
+        @{Name = 'wuauserv'; Display = 'Windows Update'}
     )
     
     foreach ($svc in $servicesToRestart) {
@@ -691,7 +702,7 @@ if ($checkAutopatch -eq 1) {
                             if ($brokerProcess) {
                                 Write-Log "Windows Autopatch Client Broker started successfully"
                             } else {
-                                Write-Log "Failed to start Windows Autopatch Client Broker - May require manual intervention"
+                                Write-Log "Warning: Could not start Windows Autopatch Client Broker - May require manual intervention"
                             }
                         }
                     }
@@ -774,31 +785,19 @@ if ($refreshPRT -eq 1) {
 if ($refreshWUPolicies -eq 1) {
     Write-Log "Refreshing Windows Update policies..."
     try {
-        # Reset Windows Update policy cache
-        Remove-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results" -Recurse -Force -ErrorAction SilentlyContinue
-        
-        # Use USOClient to check for updates and refresh policies
-        if (Test-Path "$env:windir\System32\UsoClient.exe") {
-            Start-Process -FilePath "$env:windir\System32\UsoClient.exe" -ArgumentList "ScanInstallWait" -NoNewWindow -ErrorAction SilentlyContinue
+        # Ask the update orchestrator for a scan. Nothing is deleted here: the scan history
+        # (Auto Update\Results) and the update database (DataStore.edb) stay in place. The database is only
+        # rebuilt by the component reset step above, when that step finds a reason for it.
+        # Installation stays with the update policy (update rings, Autopatch).
+        $usoClient = "$env:windir\System32\UsoClient.exe"
+        if (Test-Path $usoClient) {
+            Start-Process -FilePath $usoClient -ArgumentList "StartScan" -NoNewWindow -ErrorAction Stop
             Write-Log "Windows Update scan triggered via UsoClient"
+        } else {
+            Write-Log "UsoClient.exe not found - scan not triggered"
         }
-        
-        # Alternative: Use wuauclt if available (legacy)
-        Start-Process -FilePath "wuauclt.exe" -ArgumentList "/detectnow", "/updatenow" -NoNewWindow -ErrorAction SilentlyContinue
-        Write-Log "Windows Update detection triggered"
-        
     } catch {
         Write-Log "Error refreshing Windows Update policies: $($_.Exception.Message)"
-    }
-
-    # Clear Windows Update cache to force re-evaluation
-    Write-Log "Clearing Windows Update cache..."
-    try {
-        Remove-Item -Path "$env:SystemRoot\SoftwareDistribution\DataStore\DataStore.edb" -Force -ErrorAction SilentlyContinue
-        Remove-Item -Path "$env:SystemRoot\SoftwareDistribution\DataStore\Logs\*.log" -Force -ErrorAction SilentlyContinue
-        Write-Log "Windows Update cache cleared"
-    } catch {
-        Write-Log "Error clearing Windows Update cache: $($_.Exception.Message)"
     }
 } else {
     Write-Log "Windows Update policy refresh disabled in configuration - skipping"
@@ -849,59 +848,55 @@ if ($clearRebootFlags -eq 1) {
     Write-Log "Pending reboot flag check disabled in configuration - skipping"
 }
 
-# Verify and start critical services only if they are not running
+# Verify critical services: repair a disabled service and start the ones that have to run all the time.
+# Default start types are restored, never forced to Automatic: wuauserv, BITS and TrustedInstaller are
+# demand-start services and are normally stopped when idle.
+$criticalServices = [ordered]@{
+    'wuauserv'                  = @{Display = 'Windows Update'; DefaultStart = 'Manual'; AlwaysRunning = $false}
+    'BITS'                      = @{Display = 'Background Intelligent Transfer Service'; DefaultStart = 'Manual'; AlwaysRunning = $false}
+    'TrustedInstaller'          = @{Display = 'Windows Modules Installer'; DefaultStart = 'Manual'; AlwaysRunning = $false}
+    'CryptSvc'                  = @{Display = 'Cryptographic Services'; DefaultStart = 'Automatic'; AlwaysRunning = $true}
+    'IntuneManagementExtension' = @{Display = 'Intune Management Extension'; DefaultStart = 'Automatic'; AlwaysRunning = $true}
+}
 if ($verifyCriticalServices -eq 1) {
     Write-Log "Verifying critical services..."
     $servicesFixed = 0
-    $criticalServices = @{
-    'wuauserv' = 'Windows Update'
-    'BITS' = 'Background Intelligent Transfer Service'
-    'CryptSvc' = 'Cryptographic Services'
-    'TrustedInstaller' = 'Windows Modules Installer'
-    'IntuneManagementExtension' = 'Intune Management Extension'
-}
 
-foreach ($svcName in $criticalServices.Keys) {
-    try {
-        $service = Get-Service -Name $svcName -ErrorAction SilentlyContinue
-        if ($service) {
-            if ($service.Status -ne "Running") {
-                Write-Log "Service $($criticalServices[$svcName]) is not running - Starting with retry logic..."
-                $result = Start-ServiceWithRetry -ServiceName $svcName -DisplayName $criticalServices[$svcName]
+    foreach ($svcName in $criticalServices.Keys) {
+        $svcInfo = $criticalServices[$svcName]
+        try {
+            $service = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+            if (-not $service) {
+                Write-Log "Warning: Service $svcName not found on this system"
+                continue
+            }
+
+            if ($service.StartType -eq 'Disabled') {
+                Write-Log "Service $($svcInfo.Display) is disabled - restoring default start type $($svcInfo.DefaultStart)..."
+                Set-Service -Name $svcName -StartupType $svcInfo.DefaultStart -ErrorAction Stop
+                $verifyStartupType = (Get-Service -Name $svcName -ErrorAction SilentlyContinue).StartType
+                if ($verifyStartupType -ne 'Disabled') {
+                    Write-Log "Set $($svcInfo.Display) to $verifyStartupType startup - Verified"
+                    $servicesFixed++
+                } else {
+                    Write-Log "Error: $($svcInfo.Display) is still disabled (a policy may enforce this)"
+                }
+            }
+
+            if ($svcInfo.AlwaysRunning -and $service.Status -ne "Running") {
+                Write-Log "Service $($svcInfo.Display) is not running - Starting with retry logic..."
+                $result = Start-ServiceWithRetry -ServiceName $svcName -DisplayName $svcInfo.Display
                 if ($result) {
                     $servicesFixed++
                 }
-                else {
-                    Write-Log "WARNING: Failed to start $($criticalServices[$svcName]) after retries"
-                }
             }
-            
-            # Ensure service is set to automatic start (except TrustedInstaller which is Manual)
-            if ($svcName -ne 'TrustedInstaller') {
-                $startupType = (Get-Service -Name $svcName).StartType
-                if ($startupType -ne 'Automatic') {
-                    Set-Service -Name $svcName -StartupType Automatic -ErrorAction SilentlyContinue
-                    
-                    # Verify startup type was changed
-                    $verifyStartupType = (Get-Service -Name $svcName -ErrorAction SilentlyContinue).StartType
-                    if ($verifyStartupType -eq 'Automatic') {
-                        Write-Log "Set $($criticalServices[$svcName]) to Automatic startup - Verified"
-                        $servicesFixed++
-                    } else {
-                        Write-Log "Warning: Could not verify startup type for $($criticalServices[$svcName])"
-                    }
-                }
-            }
-        } else {
-            Write-Log "Warning: Service $svcName not found on this system"
+        } catch {
+            Write-Log "Error managing service $($svcInfo.Display): $($_.Exception.Message)"
         }
-    } catch {
-        Write-Log "Error managing service $($criticalServices[$svcName]): $($_.Exception.Message)"
     }
-}
 
     if ($servicesFixed -eq 0) {
-        Write-Log "All critical services are running and properly configured - skipping"
+        Write-Log "All critical services are properly configured - skipping"
     }
 } else {
     Write-Log "Critical services verification disabled in configuration - skipping"
@@ -965,7 +960,7 @@ if ($runDiskCleanup -eq 1) {
             }
             
             # Run cleanmgr with automated settings in hidden mode
-            Start-Process -FilePath "$env:SystemRoot\System32\cleanmgr.exe" -ArgumentList "/sagerun:100" -Wait -NoNewWindow -WindowStyle Hidden -ErrorAction SilentlyContinue
+            Start-Process -FilePath "$env:SystemRoot\System32\cleanmgr.exe" -ArgumentList "/sagerun:100" -Wait -WindowStyle Hidden -ErrorAction SilentlyContinue
             Write-Log "Disk Cleanup completed"
             
             # Check free space after cleanup
@@ -987,6 +982,13 @@ if ($runDiskCleanup -eq 1) {
 # Remove WSUS policy blocks that prevent Intune-managed updates
 if ($removePolicyBlocks -eq 1) {
     Write-Log "Checking for WSUS policy blocks (conflicts with Intune)..."
+    # A Configuration Manager client sets the WSUS values on purpose (software update point).
+    # On co-managed devices they must stay unless the Windows Update workload was moved to Intune,
+    # and Configuration Manager removes them itself in that case.
+    $configMgrClient = Get-Service -Name CcmExec -ErrorAction SilentlyContinue
+    if ($configMgrClient) {
+        Write-Log "Configuration Manager client found (CcmExec) - WSUS policy values are left unchanged"
+    } else {
     try {
     # These policies force the device to use WSUS instead of Windows Update/Intune
     $policyBlocks = @(
@@ -1003,7 +1005,7 @@ if ($removePolicyBlocks -eq 1) {
             $value = Get-ItemProperty -Path $block.Path -Name $block.Name -ErrorAction SilentlyContinue
             if ($value) {
                 Remove-ItemProperty -Path $block.Path -Name $block.Name -Force -ErrorAction SilentlyContinue
-                Write-Log "Removed policy block: $($block.Path)\$($block.Name)"
+                Write-Log "Removed policy block: $($block.Path)\$($block.Name) (was: $($value.$($block.Name)))"
                 $blocksRemoved++
             }
         }
@@ -1017,59 +1019,45 @@ if ($removePolicyBlocks -eq 1) {
     } catch {
         Write-Log "Error removing policy blocks: $($_.Exception.Message)"
     }
+    }
 } else {
     Write-Log "Windows Update policy blocks removal disabled in configuration - skipping"
 }
 
-# Reset Windows Update Agent only if COM interface is not accessible
+# Restart the Windows Update Agent only if its COM interface does not answer
 if ($resetWUAgent -eq 1) {
     Write-Log "Checking Windows Update Agent health..."
     try {
-    $needsReset = $false
-    $updateSession = New-Object -ComObject Microsoft.Update.Session -ErrorAction SilentlyContinue
-    
-    if (-not $updateSession) {
-        $needsReset = $true
-    } else {
-        try {
-            $updateSearcher = $updateSession.CreateUpdateSearcher()
-            $null = $updateSearcher.Search("IsInstalled=0 and IsHidden=0")
-        } catch {
-            $needsReset = $true
+        # Offline search: tests the agent and its database without depending on the network.
+        function Test-WUAgentResponds {
+            try {
+                $session = New-Object -ComObject Microsoft.Update.Session -ErrorAction Stop
+                $searcher = $session.CreateUpdateSearcher()
+                $searcher.Online = $false
+                $null = $searcher.Search("IsInstalled=0 and IsHidden=0")
+                return $true
+            } catch {
+                return $false
+            }
         }
-    }
-    
-    if ($needsReset) {
-        Write-Log "Windows Update Agent needs reset - resetting..."
-        # Stop Windows Update service
-        Stop-Service -Name wuauserv -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 1
-        
-        # Remove Windows Update registry keys to force re-initialization
-        $regRemoved = $false
-        if (Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate") {
-            Remove-Item -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate" -Recurse -Force -ErrorAction SilentlyContinue
-            $regRemoved = $true
-        }
-        
-        # Restart Windows Update service (will recreate registry keys)
-        Start-Service -Name wuauserv -ErrorAction Stop
-        Start-Sleep -Seconds 2
-        
-        # Verify service is running and registry was recreated
-        $wuService = Get-Service -Name wuauserv -ErrorAction SilentlyContinue
-        $regRecreated = Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate"
-        
-        if ($wuService -and $wuService.Status -eq "Running" -and $regRecreated) {
-            Write-Log "Windows Update Agent reset completed successfully (Service: Running, Registry: Recreated)"
-        } elseif ($regRemoved -and -not $regRecreated) {
-            Write-Log "Warning: Registry keys were removed but may not have been recreated yet"
+
+        if (Test-WUAgentResponds) {
+            Write-Log "Windows Update Agent is healthy - skipping reset"
         } else {
-            Write-Log "Windows Update Agent reset completed with potential issues"
+            Write-Log "Windows Update Agent does not respond - restarting the service..."
+            # The registry key HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate is NOT deleted.
+            # It holds the device's update client ID and orchestrator state, and Windows does not fully recreate it.
+            Stop-Service -Name wuauserv -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 1
+            Start-Service -Name wuauserv -ErrorAction Stop
+            Start-Sleep -Seconds 2
+
+            if (Test-WUAgentResponds) {
+                Write-Log "Windows Update Agent responds again after the service restart"
+            } else {
+                Write-Log "Error: Windows Update Agent still does not respond. Next step: component reset (resetWUComponents) or DISM/SFC (fullRepair)"
+            }
         }
-    } else {
-        Write-Log "Windows Update Agent is healthy - skipping reset"
-    }
     } catch {
         Write-Log "Error checking/resetting Windows Update Agent: $($_.Exception.Message)"
     }
@@ -1098,12 +1086,19 @@ foreach ($svcName in $criticalServices.Keys) {
     try {
         $service = Get-Service -Name $svcName -ErrorAction SilentlyContinue
         if ($service) {
-            Write-Log "$($criticalServices[$svcName]): $($service.Status)"
+            Write-Log "$($criticalServices[$svcName].Display): $($service.Status) (StartType: $($service.StartType))"
         }
     } catch {
-        Write-Log "Could not check $($criticalServices[$svcName])"
+        Write-Log "Could not check $($criticalServices[$svcName].Display)"
     }
 }
 
-Write-Log "Remediation script completed successfully"
 Write-Log "NOTE: If issues persist, a system reboot may be required"
+
+# Exit code: 0 = all steps ran without error, 1 = at least one step failed (Intune then shows the remediation as failed)
+if ($global:RemediationErrors -gt 0) {
+    Write-Log "Remediation script completed with $($global:RemediationErrors) failed step(s) - see the lines starting with 'Error' or 'Failed' above"
+    exit 1
+}
+Write-Log "Remediation script completed successfully"
+exit 0
