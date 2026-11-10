@@ -228,7 +228,7 @@ try {
     
     # Check for TPM activation
     try {
-        $tpmStatus = Get-WmiObject -Namespace "Root\CIMv2\Security\MicrosoftTpm" -Class Win32_Tpm -ErrorAction SilentlyContinue
+        $tpmStatus = Get-CimInstance -Namespace "Root\CIMv2\Security\MicrosoftTpm" -ClassName Win32_Tpm -ErrorAction SilentlyContinue
         if (-not $tpmStatus -or $tpmStatus.IsActivated_InitialValue -ne $true) {
             $issues += "TPM is not activated or not present"
         }
@@ -250,7 +250,7 @@ try {
     
     # Check free disk space on system drive (minimum configurable GB required)
     try {
-        $sysDrive = Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='C:'" -ErrorAction SilentlyContinue
+        $sysDrive = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='C:'" -ErrorAction SilentlyContinue
         if ($sysDrive) {
             $freeSpaceGB = [math]::Round($sysDrive.FreeSpace / 1GB, 2)
             if ($freeSpaceGB -lt $minDiskSpaceGB) {

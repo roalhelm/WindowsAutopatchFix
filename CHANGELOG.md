@@ -11,6 +11,10 @@ All notable changes to this project will be documented in this file.
 - **CBS.log**: The check now matches real corruption markers (`[SR] Cannot repair`, `CBS_E_STORE_CORRUPTION`, `0x80073712`, `0x800f0831`, ...) instead of the generic words `corrupt|failed|error`.
 - **Pending reboot**: Logged as information and no longer triggers remediation, because remediation cannot (and must not) resolve it.
 
+### Changed - both scripts
+
+- **WMI access**: `Get-WmiObject` replaced with `Get-CimInstance` (TPM status, free disk space). `Get-WmiObject` does not exist in PowerShell 7. `wmic.exe` was never used.
+
 ### Fixed - remediation.ps1 v3.4 (destructive steps removed)
 
 - **Intune policy key**: `PolicyManager\current\device\Update` is no longer deleted by the registry cleanup step.

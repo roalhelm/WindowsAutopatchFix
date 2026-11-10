@@ -270,7 +270,7 @@ Invoke-LogRotation
 Write-Log "Starting comprehensive Windows Update remediation for all common issues (v3.4)"
 
 # Check for TPM
-$tpmStatus = Get-WmiObject -Namespace "Root\CIMv2\Security\MicrosoftTpm" -Class Win32_Tpm
+$tpmStatus = Get-CimInstance -Namespace "Root\CIMv2\Security\MicrosoftTpm" -ClassName Win32_Tpm -ErrorAction SilentlyContinue
 if ($tpmStatus -and $tpmStatus.IsActivated_InitialValue -eq $true) {
     Write-Log "TPM is activated"
 } else {
@@ -286,7 +286,7 @@ if ($secureBoot) {
 }
 
 # Check free disk space on system drive
-$sysDrive = Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='C:'"
+$sysDrive = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='C:'" -ErrorAction SilentlyContinue
 $freeSpaceGB = [math]::Round($sysDrive.FreeSpace / 1GB, 2)
 Write-Log "Free disk space on C: drive: $freeSpaceGB GB"
 if ($freeSpaceGB -lt 20) {
@@ -939,7 +939,7 @@ if ($configureAppReadiness -eq 1) {
 if ($runDiskCleanup -eq 1) {
     Write-Log "Checking disk space..."
     try {
-    $sysDrive = Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='C:'"
+    $sysDrive = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='C:'" -ErrorAction SilentlyContinue
     $freeSpaceGBBefore = [math]::Round($sysDrive.FreeSpace / 1GB, 2)
     Write-Log "Free disk space: $freeSpaceGBBefore GB"
     
@@ -969,7 +969,7 @@ if ($runDiskCleanup -eq 1) {
             Write-Log "Disk Cleanup completed"
             
             # Check free space after cleanup
-            $sysDrive = Get-WmiObject Win32_LogicalDisk -Filter "DeviceID='C:'"
+            $sysDrive = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DeviceID='C:'" -ErrorAction SilentlyContinue
             $freeSpaceGBAfter = [math]::Round($sysDrive.FreeSpace / 1GB, 2)
             $freedSpace = $freeSpaceGBAfter - $freeSpaceGBBefore
             Write-Log "Free disk space after cleanup: $freeSpaceGBAfter GB (freed: $([math]::Round($freedSpace, 2)) GB)"
