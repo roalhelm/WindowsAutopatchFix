@@ -7,7 +7,7 @@
 
 Intelligent detection and remediation scripts for Windows Update failures on Microsoft Intune-managed devices. Features configurable repair steps that only execute when problems are detected, minimizing unnecessary system changes while addressing over 20 different error conditions.
 
-## 🎯 Purpose
+## Purpose
 
 Intelligent, targeted repair of Windows Update issues for Intune-managed devices. Only performs repairs when problems are detected.
 
@@ -19,7 +19,7 @@ Intelligent, targeted repair of Windows Update issues for Intune-managed devices
 
 **Addresses:** Service failures, corrupted components, registry/policy conflicts, WSUS artifacts, Autopatch issues, disk space, and database corruption.
 
-## 🔍 Supported Error Codes
+## Supported Error Codes
 
 Addresses the following common Windows Update error codes:
 
@@ -35,14 +35,14 @@ Addresses the following common Windows Update error codes:
 
 And many more...
 
-## 📋 Requirements
+## Requirements
 
 - **Platform:** Windows 10/11
 - **Management:** Microsoft Intune
 - **PowerShell:** 5.1 or later
 - **Permissions:** System/Administrator level (runs as SYSTEM in Intune)
 
-## 🚀 Deployment
+## Deployment
 
 **Intune Portal:** Devices > Scripts and remediations > Proactive remediations > + Create
 
@@ -53,7 +53,7 @@ And many more...
 - Schedule: **Daily** (recommended)
 - Assign to: All Windows devices or target groups
 
-## 📁 Files
+## Files
 
 ### `detection.ps1`
 Checks: TPM/Secure Boot, disk space (20 GB min), services, WU components, registry/WSUS config, Intune/Autopatch status, pending reboots.
@@ -101,7 +101,7 @@ $refreshWUPolicies = 1       # Windows Update policy refresh
 
 Set any variable to `0` to disable that specific repair step.
 
-## 📊 Logging
+## Logging
 
 Location: `C:\ProgramData\Microsoft\IntuneManagementExtension\Logs\WindowsUpdateFix_*.log`
 
@@ -115,7 +115,7 @@ Location: `C:\ProgramData\Microsoft\IntuneManagementExtension\Logs\WindowsUpdate
 10:15:45 - DLL re-registration completed
 ```
 
-## 🔧 Manual Execution
+## Manual Execution
 
 For testing or troubleshooting, you can run the scripts manually:
 
@@ -129,7 +129,7 @@ powershell.exe -ExecutionPolicy Bypass -File .\remediation.ps1
 
 **Note:** Scripts require elevated privileges (Run as Administrator).
 
-## 🛠️ Customization
+## Customization
 
 ### Configure Repair Steps
 
@@ -148,7 +148,7 @@ $reregisterDLLs = 1          # DLL re-registration
 - **Deep Repair:** Set `$fullRepair = 1` (enables DISM/SFC - increases runtime)
 - **Intune-only/Autopatch:** Focus on `$checkAutopatch`, `$removePolicyBlocks`, `$refreshPRT`, `$restartIntune`
 
-## 📈 Monitoring
+## Monitoring
 
 Monitor remediation effectiveness through:
 
@@ -164,7 +164,7 @@ Monitor remediation effectiveness through:
    - Verify devices can check for updates successfully
    - Confirm update installation proceeds normally
 
-## ⚠️ Limitations
+## Limitations
 
 The remediation script **cannot** automatically fix:
 
@@ -179,7 +179,7 @@ These issues require manual intervention or different remediation approaches.
 
 **Note:** The script intelligently skips repairs when components are already healthy, so execution time varies based on actual problems detected.
 
-## 🔄 ConfigMgr/WSUS Migration Support
+## ConfigMgr/WSUS Migration Support
 
 Addresses migration issues from ConfigMgr/WSUS to Intune/Autopatch:
 
@@ -193,20 +193,20 @@ Addresses migration issues from ConfigMgr/WSUS to Intune/Autopatch:
 
 [Microsoft Docs](https://learn.microsoft.com/en-us/windows/deployment/windows-autopatch/references/windows-autopatch-conflicting-configurations)
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Please feel free to submit issues or pull requests.
 
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 👤 Author
+## Author
 
 **Ronny Alhelm**
 - GitHub: [@roalhelm](https://github.com/roalhelm)
 
-## 🔄 Version History
+## Version History
 
 ### Version 3.0 (Current - 2025-12-11)
 - **Intelligent Detection** - Only repairs components that are actually broken
@@ -236,7 +236,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Basic service restart functionality
 - Component folder reset
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - Microsoft Intune documentation and community
 - Windows Update troubleshooting guides

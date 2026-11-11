@@ -41,7 +41,7 @@ All notable changes to this project will be documented in this file.
 
 ## [3.3 / 2.2] - 2026-06-02
 
-### ✨ Added - detection.ps1 v2.2
+### Added - detection.ps1 v2.2
 
 #### Enhanced Diagnostics
 - **BitLocker Status Check**: Detects if BitLocker is enabled on C: drive (informational - may block feature updates)
@@ -76,7 +76,7 @@ All notable changes to this project will be documented in this file.
   - `$networkTestTimeout = 5` (new)
 - **Log Rotation**: Automatic rotation at 10 MB, keeps last 5 logs, deletes logs older than 30 days
 
-### ✨ Added - remediation.ps1 v3.3
+### Added - remediation.ps1 v3.3
 
 #### Reliability Improvements
 - **Service Retry Logic**: New `Start-ServiceWithRetry` function
@@ -106,7 +106,7 @@ All notable changes to this project will be documented in this file.
   - `$dllMinYear = 2020` (new)
 - **Log Rotation**: Automatic rotation at 10 MB, keeps last 5 logs
 
-### 🔧 Changed
+### Changed
 
 #### detection.ps1
 - Updated disk space logging to include threshold value
@@ -121,7 +121,7 @@ All notable changes to this project will be documented in this file.
 - Windows Update service restart now uses `Start-ServiceWithRetry` function
 - Version updated to 3.3
 
-### 📊 Performance
+### Performance
 
 #### detection.ps1
 - Event log query limit increase may add 1-2 seconds to execution time
@@ -134,7 +134,7 @@ All notable changes to this project will be documented in this file.
 - Extended reboot flag cleanup adds ~1 second
 - Overall execution time expected: 2-5 minutes excluding DISM/SFC (unchanged for healthy systems)
 
-### 📝 Documentation
+### Documentation
 
 #### New Files
 - **Test-WindowsUpdateFix.ps1**: Automated test suite for local validation
@@ -147,7 +147,7 @@ All notable changes to this project will be documented in this file.
 - **README.md**: Added "What's New" section, updated version badges, enhanced feature list
 - **CHANGELOG.md**: This file - comprehensive change documentation
 
-### 🔬 Testing
+### Testing
 
 Recommended testing procedure:
 1. Run `Test-WindowsUpdateFix.ps1` to validate script integrity
@@ -156,7 +156,7 @@ Recommended testing procedure:
 4. Execute `remediation.ps1` with specific flags to test retry logic
 5. Verify log rotation after running multiple times
 
-### 📋 Migration Notes
+### Migration Notes
 
 **From v3.2 / v2.1:**
 - No breaking changes
@@ -170,7 +170,7 @@ Recommended testing procedure:
 - New scripts: Can still edit values OR use parameters
 - Intune deployment: No changes required (parameters optional)
 
-### 🚀 Deployment Checklist
+### Deployment Checklist
 
 Before deploying to production:
 - [ ] Run `Test-WindowsUpdateFix.ps1` locally (requires admin)
@@ -181,7 +181,7 @@ Before deploying to production:
 - [ ] Confirm no performance degradation on older hardware
 - [ ] Update Intune assignment group to include production devices
 
-### 🔗 Related Issues
+### Related Issues
 
 **Fixes:**
 - DLL version detection addresses root cause of 0xC1900200 errors

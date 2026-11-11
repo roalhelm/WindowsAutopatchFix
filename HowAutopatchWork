@@ -17,7 +17,7 @@ Note: LTSC devices are managed for quality updates only; feature updates aren’
 Diagram 1 — Quality Update process (includes all components)
 (Rendered above. It shows: Autopatch service schedules → device assignment/rings → IME & readiness → WUA offer → Client Broker coordinates & reports → DO assists download → install → telemetry reporting/compliance.)
 
-🖼️ Diagram 2 — Feature Update process (includes all components)
+Diagram 2 — Feature Update process (includes all components)
 I’ll generate the second chart now—Feature Update end‑to‑end, including Client Broker Upgrader and Windows Setup / SetupDiag.
 
 
@@ -41,7 +41,7 @@ Wichtige Systemkomponenten im Autopatch-Prozess
 7. Autopatch Orchestrator (Cloud)
     * Kein lokaler Dienst, aber wichtig: steuert die Ringe und Zeitpläne aus der Cloud.
 
-💡 Für Feature Updates ist zusätzlich der Setup Engine (Windows Setup.exe) beteiligt, der vom Upgrader angestoßen wird.
+Für Feature Updates ist zusätzlich der Setup Engine (Windows Setup.exe) beteiligt, der vom Upgrader angestoßen wird.
 
 
 

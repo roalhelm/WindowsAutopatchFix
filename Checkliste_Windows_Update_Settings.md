@@ -1,11 +1,11 @@
 # Windows Update & Autopatch - Checkliste für Support
 
-## 📋 Übersicht
+## Übersicht
 Diese Checkliste hilft dabei, Windows Update und Autopatch-Probleme systematisch zu erkennen und zu beheben. Sie enthält kritische Settings, deren Sollwerte und potenzielle Problemkombinationen.
 
 ---
 
-## 🔍 HARDWARE & FIRMWARE-VORAUSSETZUNGEN
+## HARDWARE & FIRMWARE-VORAUSSETZUNGEN
 
 ### 1. TPM (Trusted Platform Module)
 | Prüfung | Wo zu prüfen | Sollwert | Problem bei |
@@ -13,7 +13,7 @@ Diese Checkliste hilft dabei, Windows Update und Autopatch-Probleme systematisch
 | **TPM-Status** | Geräte-Manager oder `Get-WmiObject -Namespace "Root\CIMv2\Security\MicrosoftTpm" -Class Win32_Tpm` | TPM muss aktiviert sein (`IsActivated_InitialValue = $true`) | TPM deaktiviert oder nicht vorhanden → Windows 11 Upgrade blockt |
 | | Systemeinstellungen > Sicherheit > Gerätesicherheit | TPM 2.0 vorhanden | TPM 1.2 (zu alt) oder TPM 0.0 (nicht vorhanden) |
 
-**⚠️ Problemkombinationen:**
+**Problemkombinationen:**
 - TPM deaktiviert + Windows 11 Update geplant = **Fehler 0xC1900200**
 - Unsicheres TPM (externe TPM ohne UEFI) + Secure Boot = Instabilität
 
@@ -25,13 +25,13 @@ Diese Checkliste hilft dabei, Windows Update und Autopatch-Probleme systematisch
 | **Secure Boot Status** | UEFI-Setup (F2/Del beim Boot) oder PowerShell: `Confirm-SecureBootUEFI` | Enabled | Deaktiviert → Sicherheitsrisiken, Update-Blocken |
 | **UEFI Firmware** | UEFI-Setup > Info | Aktuell | Veraltetes BIOS/UEFI → Inkompatibilität mit neuen Windows-Updates |
 
-**⚠️ Problemkombinationen:**
+**Problemkombinationen:**
 - Secure Boot aus + TPM aus = **Update mit 0x80070002 oder 0x80070643 scheitert**
 - BIOS < 2 Jahre alt + Insider Builds = CPU Microcode-Probleme
 
 ---
 
-## 💾 DISK & SPEICHER
+## DISK & SPEICHER
 
 ### 3. Festplattenplatz
 | Prüfung | Wo zu prüfen | Sollwert | Problem bei |
@@ -41,14 +41,14 @@ Diese Checkliste hilft dabei, Windows Update und Autopatch-Probleme systematisch
 | **SoftwareDistribution Ordner Größe** | `C:\Windows\SoftwareDistribution\Download` | < 500 MB | > 1 GB = zu viele hängen-gebliebene Update-Dateien |
 | **Anzahl Dateien in Download** | `(Get-ChildItem C:\Windows\SoftwareDistribution\Download).Count` | < 50 Dateien | > 50 Dateien = **Fehler 0x80240034** (korrupte Downloads) |
 
-**⚠️ Problemkombinationen:**
+**Problemkombinationen:**
 - < 15 GB freier Platz + DISM/SFC Repair geplant = **DISM schlägt fehl**
 - > 50 Dateien in SoftwareDistribution + antiker WU-Cache = **0x80240034**
 - Temp-Ordner auf anderer Partition + zu wenig Platz auf C: = Installation blockiert
 
 ---
 
-## 🔧 KRITISCHE WINDOWS SERVICES
+## KRITISCHE WINDOWS SERVICES
 
 ### 4. Automatische Updates (wuauserv)
 | Prüfung | Wo zu prüfen | Sollwert | Problem bei |
@@ -57,7 +57,7 @@ Diese Checkliste hilft dabei, Windows Update und Autopatch-Probleme systematisch
 | **Starttyp** | Services.msc (Properties) oder `Get-Service wuauserv \| Select StartType` | Automatic | Disabled/Manual → Updates laufen nicht automatisch |
 | **Fehler im Event Log** | Event Viewer > Windows Logs > System (IDs 16, 20, 24, 25) | Keine Fehler in letzten 7 Tagen | > 5 Fehler in 7 Tagen = **0x8024402F** (Kommunikationsfehler) |
 
-**⚠️ Problemkombinationen:**
+**Problemkombinationen:**
 - wuauserv Stopped + BITS nicht läuft = **Updates blockiert komplett**
 - wuauserv läuft + alte DLLs = **0xC1900200**
 
@@ -85,7 +85,7 @@ Diese Checkliste hilft dabei, Windows Update und Autopatch-Probleme systematisch
 | **Status** | Services.msc → "IntuneManagementExtension" oder `Get-Service IntuneManagementExtension` | Status = **Running** | Status = Stopped/Not Found |
 | **Intune Enrollment** | HKLM:\SOFTWARE\Microsoft\Enrollments | Einträge müssen vorhanden sein | Keine Enrollments = Device nicht bei Intune registriert |
 
-**⚠️ Problemkombinationen:**
+**Problemkombinationen:**
 - IntuneManagementExtension Stopped + Autopatch aktiv = **Kein Remediation möglich**
 
 ---
@@ -98,7 +98,7 @@ Diese Checkliste hilft dabei, Windows Update und Autopatch-Probleme systematisch
 
 ---
 
-## 📝 REGISTRY & LEGACY POLICIES (WSUS/GPO Konflikte)
+## REGISTRY & LEGACY POLICIES (WSUS/GPO Konflikte)
 
 ### 9. WSUS/GPO Konflikte (Legacy Policies)
 | Prüfung | Wo zu prüfen | Sollwert | Problem bei |
@@ -108,7 +108,7 @@ Diese Checkliste hilft dabei, Windows Update und Autopatch-Probleme systematisch
 | **Auto Update Policy** | `HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU` - `NoAutoUpdate` | Sollte nicht existieren oder = 0 | = 1 (Auto Updates deaktiviert) |
 | **Installationshora** | `HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU` - `ScheduledInstallDay` | = 0 (every day) | = spezifisches Datum (kann Konflikte erzeugen) |
 
-**⚠️ Problemkombinationen:**
+**Problemkombinationen:**
 - WSUS konfiguriert + ConfigMgr Remnants im Registry = **Double-Management-Konflikt**
 - GPO WSUS + Intune Updates = **0x8024402F** (Mixed-Policy-Fehler) - Intune komplett blockiert
 - `UseWUServer = 1` ohne erreichbaren WSUS-Server = **Totaler Update-Block**
@@ -124,7 +124,7 @@ Diese Checkliste hilft dabei, Windows Update und Autopatch-Probleme systematisch
 
 ---
 
-## 🔄 WINDOWS UPDATE & AUTOPATCH
+## WINDOWS UPDATE & AUTOPATCH
 
 ### 11. Windows Update Komponenten Status
 | Prüfung | Wo zu prüfen | Sollwert | Problem bei |
@@ -134,7 +134,7 @@ Diese Checkliste hilft dabei, Windows Update und Autopatch-Probleme systematisch
 | **WU DLL Registrierung** | PowerShell: `regsvr32 wuapi.dll` (Test) | DLL lädt ohne Fehler | DLL-Fehler = **0x80070643** |
 | **Windows Update COM Interface** | PowerShell: `New-Object -ComObject Microsoft.Update.Session` | Erstellt erfolgreich Objekt | COM-Error = WU völlig defekt |
 
-**⚠️ Problemkombinationen:**
+**Problemkombinationen:**
 - SoftwareDistribution > 1 GB + > 50 Dateien + DLL-Fehler = **Total Neustart von WU nötig**
 - catroot2 > 2 GB + alte Zertifikate = **0x80070643** (Signaturvalidierung fehlgeschlagen)
 
@@ -147,13 +147,13 @@ Diese Checkliste hilft dabei, Windows Update und Autopatch-Probleme systematisch
 | **Autopatch Device Registration** | `HKLM:\SOFTWARE\Microsoft\IntuneManagementExtension\Autopatch` | Einträge vorhanden (DeviceId, etc.) | Keine Einträge = Device nicht registriert in Autopatch |
 | **Autopatch Policies** | Event Log: "Autopatch" suchen | Keine Fehler beim Policy-Abruf | Fehler 429 (Rate Limit), 403 (Zugriff verweigert) = **Policy-Sync blockiert** |
 
-**⚠️ Problemkombinationen:**
+**Problemkombinationen:**
 - Autopatch Agent aktiv + WSUS konfiguriert + Intune = **Triple-Konflikt → 0x8024402F**
 - Autopatch Device nicht registriert + fehlende Policies = **Keine automatischen Updates**
 
 ---
 
-## 🌐 NETZWERK & INTUNE VERBINDUNG
+## NETZWERK & INTUNE VERBINDUNG
 
 ### 13. Intune Connectivity
 | Prüfung | Wo zu prüfen | Sollwert | Problem bei |
@@ -164,7 +164,7 @@ Diese Checkliste hilft dabei, Windows Update und Autopatch-Probleme systematisch
 
 ---
 
-## ⚙️ SYSTEMKONFIGURATION
+## SYSTEMKONFIGURATION
 
 ### 14. Pending Reboot Status
 | Prüfung | Wo zu prüfen | Sollwert | Problem bei |
@@ -173,13 +173,13 @@ Diese Checkliste hilft dabei, Windows Update und Autopatch-Probleme systematisch
 | | `HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce` | Leer | Hat Einträge (verhindert neuen Reboot) |
 | **Component-Based Servicing (CBS)** | `HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\Reboot Required` | Sollte nicht existieren | Existiert = **Reboot erforderlich** |
 
-**⚠️ Problemkombinationen:**
+**Problemkombinationen:**
 - PendingFileRenameOperations existiert + neue Update = **Fehler 0x800F0922**
 - Mehrere alte Pending Reboot Flags = **Reboot wird nie durchgeführt**
 
 ---
 
-## 🔐 SICHERHEIT & UPDATES
+## SICHERHEIT & UPDATES
 
 ### 15. Defender & Security Status
 | Prüfung | Wo zu prüfen | Sollwert | Problem bei |
@@ -189,23 +189,23 @@ Diese Checkliste hilft dabei, Windows Update und Autopatch-Probleme systematisch
 
 ---
 
-## 📊 SCHNELLCHECKLISTE - PROBLEMDIAGNOSE
+## SCHNELLCHECKLISTE - PROBLEMDIAGNOSE
 
 ### Fehler: **0xC1900200**
 ```
-❌ Prüfe:
+Prüfe:
   1. TPM aktiviert? (MUSS sein)
   2. Secure Boot enabled? (MUSS sein)
   3. SetupType im Registry = 0 oder existiert nicht?
   4. Keine PendingFileRenameOperations?
   5. > 20 GB freier Speicher?
   
-✅ Lösung: remediation.ps1 mit $fullRepair = 1
+Lösung: remediation.ps1 mit $fullRepair = 1
 ```
 
 ### Fehler: **0x8024402F**
 ```
-❌ Prüfe:
+Prüfe:
   1. WSUS konfiguriert? (MUSS leer sein für Intune-only)
   2. UseWUServer = 1 im Registry? (BLOCKIERT Intune komplett!)
   3. Autopatch + WSUS gleichzeitig? (KONFLIKT!)
@@ -213,54 +213,54 @@ Diese Checkliste hilft dabei, Windows Update und Autopatch-Probleme systematisch
   5. wuauserv Service läuft?
   6. Event Log > 5 Fehler in 7 Tagen?
   
-✅ Lösung: WSUS-Policies entfernen (remediation.ps1) + PRT refresh
+Lösung: WSUS-Policies entfernen (remediation.ps1) + PRT refresh
 ```
 
 ### Fehler: **0x80240034**
 ```
-❌ Prüfe:
+Prüfe:
   1. > 50 Dateien in C:\Windows\SoftwareDistribution\Download?
   2. Antivirus blockt Download?
   3. Proxy/Firewall blockt Updates?
   
-✅ Lösung: SoftwareDistribution zurücksetzen (remediation.ps1)
+Lösung: SoftwareDistribution zurücksetzen (remediation.ps1)
 ```
 
 ### Fehler: **0x80070643**
 ```
-❌ Prüfe:
+Prüfe:
   1. Zertifikate gültig? (CryptSvc läuft?)
   2. catroot2 > 2 GB?
   3. DLL wuapi.dll registriert?
   
-✅ Lösung: catroot2 löschen + DLL neu registrieren
+Lösung: catroot2 löschen + DLL neu registrieren
 ```
 
 ### Fehler: **0x80070490** (Device not ready)
 ```
-❌ Prüfe:
+Prüfe:
   1. TPM 2.0 vorhanden?
   2. Secure Boot für ältere Hardware aktiv?
   3. App Readiness Service läuft?
   
-✅ Lösung: TPM/UEFI-Firmware prüfen
+Lösung: TPM/UEFI-Firmware prüfen
 ```
 
 ### Kein Autopatch/Windows Update
 ```
-❌ Prüfe:
+Prüfe:
   1. Intune Enrollment ok?
   2. IntuneManagementExtension läuft?
   3. WSUS-Konflikt vorhanden?
   4. Device registriert in Autopatch?
   5. Policies synced (Event Log)?
   
-✅ Lösung: Intune Re-Enrollment (falls nötig)
+Lösung: Intune Re-Enrollment (falls nötig)
 ```
 
 ---
 
-## 🛠️ REMEDIATION KONFIGURATION
+## REMEDIATION KONFIGURATION
 
 ### Schnelle Fixes (Minimal Config)
 ```powershell
@@ -289,7 +289,7 @@ $cleanupRegistry = 1      # Legacy-Registry-Keys bereinigen
 
 ---
 
-## 📞 SUPPORT ESKALATION
+## SUPPORT ESKALATION
 
 ### Wann ist Escalation nötig?
 - **Hardware-Fehler**: TPM, Secure Boot können nicht aktiviert werden → OEM Support
@@ -308,7 +308,7 @@ Event Viewer > Application (COM/Service Fehler)
 
 ---
 
-## 📅 WARTUNGSPLAN
+## WARTUNGSPLAN
 
 | Task | Frequenz | Wenn |
 |------|----------|-----|
