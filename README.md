@@ -7,7 +7,7 @@
 
 Intelligent detection and remediation for Windows Update failures. Configurable repair steps that only execute when needed, minimizing system impact.
 
-## 🎯 Purpose
+## Purpose
 
 Smart, targeted Windows Update repair for Intune-managed devices.
 
@@ -22,15 +22,15 @@ Smart, targeted Windows Update repair for Intune-managed devices.
 
 **Addresses:** Service failures, corrupted components, registry/policy conflicts, WSUS artifacts, Autopatch issues, disk space, database corruption.
 
-## 🔍 Supported Error Codes
+## Supported Error Codes
 
 `0x80070002` `0x8007000E` `0x80240034` `0x8024402F` `0x80070643` `0x800F0922` `0xC1900200` `0x80070490` `0x800F0831` and more
 
-## 📋 Requirements
+## Requirements
 
 Windows 10/11 | Microsoft Intune | PowerShell 5.1+ | System/Admin permissions
 
-## 🚀 Deployment
+## Deployment
 
 **Intune:** Devices > Scripts and remediations > Proactive remediations > + Create
 
@@ -39,7 +39,7 @@ Windows 10/11 | Microsoft Intune | PowerShell 5.1+ | System/Admin permissions
 - Run as: **System** | 64-bit PS: **Yes** | Signature: **No**
 - Schedule: **Daily** | Assign: All Windows devices or groups
 
-## 📁 Files
+## Files
 
 **`detection.ps1`** (v2.4) - Enhanced diagnostics with BitLocker check, DLL version validation, service dependencies, extended network tests, error code dictionary  
 Exit: `0` = healthy | `1` = issues (triggers remediation)
@@ -48,33 +48,33 @@ Exit: `0` = healthy | `1` = issues (triggers remediation)
 
 **`Test-WindowsUpdateFix.ps1`** - Local validation script for testing before Intune deployment
 
-## 🆕 What's New (v3.3 / v2.2)
+## What's New (v3.3 / v2.2)
 
 **detection.ps1 v2.2:**
-- ✅ **BitLocker Status Check** - Warns if enabled (may block feature updates)
-- ✅ **DLL Version Validation** - Detects outdated Windows Update DLLs (main cause of 0xC1900200)
-- ✅ **Service Dependencies** - Checks RpcSs, DcomLaunch, UsoSvc prerequisites
-- ✅ **Extended Event Log Analysis** - Configurable limit (default 50), with error code descriptions
-- ✅ **Enhanced Network Tests** - HTTP connectivity, DNS resolution, proxy detection
-- ✅ **Error Code Dictionary** - Descriptions for 13 common error codes
-- ✅ **Log Rotation** - Automatic rotation at 10 MB, keeps last 5 logs
-- ✅ **Parameter Support** - `-LogPath`, `-Verbose` for flexible deployment
+- **BitLocker Status Check** - Warns if enabled (may block feature updates)
+- **DLL Version Validation** - Detects outdated Windows Update DLLs (main cause of 0xC1900200)
+- **Service Dependencies** - Checks RpcSs, DcomLaunch, UsoSvc prerequisites
+- **Extended Event Log Analysis** - Configurable limit (default 50), with error code descriptions
+- **Enhanced Network Tests** - HTTP connectivity, DNS resolution, proxy detection
+- **Error Code Dictionary** - Descriptions for 13 common error codes
+- **Log Rotation** - Automatic rotation at 10 MB, keeps last 5 logs
+- **Parameter Support** - `-LogPath`, `-Verbose` for flexible deployment
 
 **remediation.ps1 v3.3:**
-- ✅ **Service Retry Logic** - 3 attempts with exponential backoff (500ms → 1s → 2s)
-- ✅ **DLL Validation** - Version checks and COM interface testing after re-registration
-- ✅ **Extended Reboot Flags** - Cleans PackagesPending, RebootRequired, CBS RebootPending
-- ✅ **Parameter Support** - All 15 repair flags configurable via parameters
-- ✅ **Enhanced Validation** - Post-operation verification for all critical actions
-- ✅ **Configurable Thresholds** - SoftwareDistribution limit (75 files), retry settings
+- **Service Retry Logic** - 3 attempts with exponential backoff (500ms → 1s → 2s)
+- **DLL Validation** - Version checks and COM interface testing after re-registration
+- **Extended Reboot Flags** - Cleans PackagesPending, RebootRequired, CBS RebootPending
+- **Parameter Support** - All 15 repair flags configurable via parameters
+- **Enhanced Validation** - Post-operation verification for all critical actions
+- **Configurable Thresholds** - SoftwareDistribution limit (75 files), retry settings
 
-## 📊 Logging
+## Logging
 
 Location: `C:\ProgramData\Microsoft\IntuneManagementExtension\Logs\WindowsUpdateFix_*.log`
 
 Includes timestamps, actions, "skipping" messages, config, errors/warnings.
 
-## 🛠️ Configuration
+## Configuration
 
 Edit `remediation.ps1` configuration section - 15 options (set to `0` to disable):
 
@@ -101,7 +101,7 @@ $refreshWUPolicies = 1       # WU Policies
 - **Deep Repair:** `$fullRepair = 1` (DISM/SFC)
 - **Intune-only/Autopatch:** `$checkAutopatch`, `$removePolicyBlocks`, `$refreshPRT`, `$restartIntune`
 
-## 🔧 Manual Testing
+## Manual Testing
 
 **Local Validation (before Intune deployment):**
 ```powershell
@@ -127,19 +127,19 @@ powershell.exe -ExecutionPolicy Bypass -File .\remediation.ps1
 .\remediation.ps1 -fullRepair 1 -Verbose
 ```
 
-## 📈 Monitoring
+## Monitoring
 
 - **Intune:** Scripts and remediations > View status/rates
 - **Logs:** `WindowsUpdateFix_*.log` for errors
 - **Validation:** Test Windows Update
 
-## ⚠️ Limitations
+## Limitations
 
 Cannot auto-fix: Hardware (TPM/Secure Boot), severe disk space issues, Intune enrollment, network/firewall blocks, forced reboots.
 
 **Note:** Execution time varies - skips healthy components.
 
-## 🔄 ConfigMgr/WSUS Migration
+## ConfigMgr/WSUS Migration
 
 Auto-detects & fixes: WSUS artifacts, GPO remnants, Autopatch Client Broker, co-management issues.
 
@@ -147,11 +147,11 @@ Auto-detects & fixes: WSUS artifacts, GPO remnants, Autopatch Client Broker, co-
 
 [Docs](https://learn.microsoft.com/en-us/windows/deployment/windows-autopatch/references/windows-autopatch-conflicting-configurations)
 
-## 👤 Author
+## Author
 
 **Ronny Alhelm** - [@roalhelm](https://github.com/roalhelm)
 
-## 🔄 Version History
+## Version History
 
 **3.2 (2026-03-03)** - Enhanced reliability: Fixed race conditions with proper timing, comprehensive validation for all operations, status verification logging  
 **3.1 (2026-01-30)** - Intune-only optimization: dsregcmd PRT refresh, WSUS/GPO cleanup focus  
@@ -160,7 +160,7 @@ Auto-detects & fixes: WSUS artifacts, GPO remnants, Autopatch Client Broker, co-
 **2.0 (2024-09-19)** - Comprehensive coverage, Autopatch support, WSUS cleanup  
 **1.0 (2024-09-19)** - Initial release
 
-## 📄 License
+## License
 
 MIT License - see [LICENSE](LICENSE)
 
